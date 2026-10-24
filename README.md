@@ -4,7 +4,7 @@ GAS (Google Apps Script) + Google Sheets で動作する、カンバンタスク
 **データ保存はスプレッドシートでシンプルに、見た目は分かりやすく扱いやすいWebアプリにする** というアプローチで、生成AIと壁打ちして作成しました。
 
 Webアプリの画面とスプレッドシート(データ)の画面
-![Webアプリサンプル](image/13_testdata_webapp.png)
+![Webアプリサンプル](image/13_testdata_webapp_v1.7.png)
 ![スプレッドシートサンプル](image/13_testdata_spreadsheet.png)
 
 ## 更新履歴
