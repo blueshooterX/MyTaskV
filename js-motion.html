@@ -1,0 +1,1137 @@
+<!--
+  MyTask
+  https://github.com/blueshooterX/MyTask
+
+  Copyright (c) 2026 blueshooterX
+  Licensed under the MIT License.
+-->
+
+<script>
+    /**
+     * Motion: effect settings / theme / sound / card motion / drag / holo / gravity / boot sequence
+     */
+    const Motion = (() => {
+        const EASE = 'cubic-bezier(.2,.8,.2,1)';
+        const FX_KEY = 'mytask-fx';
+        const THEME_KEY = 'mytask-theme';
+        const THEME_MODES = ['auto', 'light', 'dark'];
+        const THEME_META = {
+            auto: { icon: 'contrast', label: '自動' },
+            light: { icon: 'light_mode', label: 'ライト' },
+            dark: { icon: 'dark_mode', label: 'ダーク' }
+        };
+        const FX_GROUPS = { A: 'A / タイルの動き', B: 'B / 状態の表現', C: 'C / ボード全体', D: 'D / HUD とフィードバック' };
+        const FX_LIST = [
+            { id: 'A1', group: 'A', name: '滑らかな並べ替え', how: '並び替え・絞り込み・ドラッグの後、カードが新しい位置へ滑って移動' },
+            { id: 'A2', group: 'A', name: '慣性のあるドラッグ', how: '掴むと浮き上がり、速さでわずかに傾く。周りが場所を空け、置いた列の縁が光る' },
+            { id: 'A3', group: 'A', name: '転送して完了', how: '✓ で走査線とともに消え、光の線で完了列へ転送。完了列が非表示なら「完了」ボタンへ' },
+            { id: 'A4', group: 'A', name: 'パネル展開', how: 'カードをクリックすると、その位置から編集画面が広がる' },
+            { id: 'A5', group: 'A', name: '走査して出現', how: '起動時・新規追加時に、カードが上から走査されて現れる' },
+            { id: 'A6', group: 'A', name: '照準', how: 'マウスを乗せると四隅にブラケット。カーソル位置がほのかに光る' },
+            { id: 'B1', group: 'B', name: '待機表示', how: '実施中で7日以上更新なし。時々ちらつき、マウスを乗せると一時的に復帰' },
+            { id: 'B2', group: 'B', name: '稼働中の発光', how: '今日更新したカードの周囲がゆっくり明滅' },
+            { id: 'B3', group: 'B', name: 'デジタルロール', how: 'ラベル記号を押すと、記号が縦に送られて切り替わる' },
+            { id: 'B4', group: 'B', name: 'グリッチ警告', how: '編集で優先度を「高」にすると、一瞬だけ映像が乱れて赤く光る' },
+            { id: 'C1', group: 'C', name: 'スキャン', how: '今日の更新が 3・5・10・20・30・50 件に届くと、光の線がボードを横切る' },
+            { id: 'C2', group: 'C', name: '俯瞰モード', how: 'メニューの「俯瞰モード」でボードが奥に倒れる（その間ドラッグは無効）。Esc で戻る' },
+            { id: 'C3', group: 'C', name: '空の列のレーダー', how: 'カードが0件の列にレーダーを表示' },
+            { id: 'C4', group: 'C', name: '重力モード', how: 'メニュー、または g キーを素早く3回。カードが崩れ落ち、掴んで投げられる。Esc で戻る' },
+            { id: 'D1', group: 'D', name: 'ランクと経験値', how: '過去26週の記録から算出。操作ごとに +EXP が飛び、満タンで RANK UP' },
+            { id: 'D2', group: 'D', name: 'チェイン', how: '3.5秒以内に続けて操作すると CHAIN を表示' },
+            { id: 'D3', group: 'D', name: '完了のロックオン', how: '完了列に入ったカードをブラケットが捕捉して TASK COMPLETE。「高」は PRIORITY' },
+            { id: 'D4', group: 'D', name: '実績ログ', how: '初回完了・3チェイン・ランク到達などを右上にログ表示' },
+            { id: 'D5', group: 'D', name: '本日の目標', how: 'ヘッダー下の3つの目標。達成でボーナス EXP' },
+            { id: 'D6', group: 'D', name: '優先枠', how: '優先度「高」のカードの縁を、琥珀色の光がゆっくり一周する' },
+            { id: 'D7', group: 'D', name: '期限ゲージ', how: '期限までの残り（14日基準）を下端の目盛りで表示。期限切れは赤い縁と OVERDUE' },
+            { id: 'D8', group: 'D', name: '効果音', how: '小さく柔らかい電子音（初期は OFF）' },
+            { id: 'D9', group: 'D', name: '着地の波紋', how: '列を移動したカードの着地点から細い輪が広がる' },
+            { id: 'D10', group: 'D', name: '起動シーケンス', how: '起動時に接続・同期のログを表示（クリックでスキップ）' }
+        ];
+
+        const fx = {};
+        const flipSkip = new Set();
+        const idAlias = new Map();
+        let holo = false;
+        let grav = null;
+        let booting = false;
+
+        const $ = s => document.querySelector(s);
+        const rand = (a, b) => a + Math.random() * (b - a);
+        const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+        const center = r => ({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+        const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const on = id => Boolean(fx[id]);
+        const findCard = id => document.querySelector(`#kanban-container .task-card[data-id="${CSS.escape(String(id))}"]`);
+        const isShown = el => Boolean(el) && el.getBoundingClientRect().width > 0;
+
+        const storage = {
+            get(key, fallback) {
+                try {
+                    const v = localStorage.getItem(key);
+                    return v === null ? fallback : v;
+                } catch (err) {
+                    return fallback;
+                }
+            },
+            set(key, value) {
+                try { localStorage.setItem(key, value); } catch (err) { console.warn(`設定を保存できませんでした（${key}）:`, err); }
+            }
+        };
+
+        // ---------- Effect settings ----------
+        function loadFx() {
+            let saved = null;
+            try { saved = JSON.parse(storage.get(FX_KEY, 'null')); } catch (err) { saved = null; }
+            const reduce = reducedMotion();
+            FX_LIST.forEach(({ id }) => {
+                fx[id] = saved && id in saved ? Boolean(saved[id]) : id !== 'D8' && !reduce;
+            });
+        }
+
+        function saveFx() {
+            storage.set(FX_KEY, JSON.stringify(fx));
+        }
+
+        function applyFx() {
+            FX_LIST.forEach(({ id }) => {
+                document.body.classList.toggle(`fx-${id}`, fx[id]);
+                const input = document.getElementById(`fx-${id}`);
+                if (input) input.checked = fx[id];
+            });
+            const snd = document.getElementById('soundBtn');
+            if (snd) {
+                snd.setAttribute('aria-pressed', String(fx.D8));
+                snd.querySelector('.material-icons').textContent = fx.D8 ? 'volume_up' : 'volume_off';
+                snd.querySelector('span:last-child').textContent = fx.D8 ? '効果音：ON' : '効果音：OFF';
+            }
+            if (!fx.C2 && holo) setHolo(false);
+            if (!fx.C4 && grav) stopGravity();
+            if (typeof Hud !== 'undefined') Hud.render();
+        }
+
+        function setFx(id, value) {
+            fx[id] = value;
+            if (id === 'D8' && value) sfx.unlock();
+            applyFx();
+            saveFx();
+            sfx.play('blip');
+        }
+
+        // ---------- Theme ----------
+        const themeMode = () => {
+            const m = storage.get(THEME_KEY, 'auto');
+            return THEME_MODES.includes(m) ? m : 'auto';
+        };
+        const resolveTheme = mode => mode === 'auto'
+            ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+            : mode;
+
+        function applyTheme(mode) {
+            document.documentElement.setAttribute('data-ui', resolveTheme(mode));
+            const btn = document.getElementById('themeBtn');
+            if (btn) {
+                btn.querySelector('.material-icons').textContent = THEME_META[mode].icon;
+                btn.title = `配色: ${THEME_META[mode].label}（クリックで切り替え）`;
+            }
+            document.querySelectorAll('#themeSeg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
+        }
+
+        function setTheme(mode, originEl) {
+            storage.set(THEME_KEY, mode);
+            sfx.play('blip');
+            if (!document.startViewTransition || reducedMotion() || !originEl) { applyTheme(mode); return; }
+            const { x, y } = center(originEl.getBoundingClientRect());
+            const vt = document.startViewTransition(() => applyTheme(mode));
+            vt.ready.then(() => {
+                const r = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+                document.documentElement.animate(
+                    { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${r}px at ${x}px ${y}px)`] },
+                    { duration: 560, easing: 'cubic-bezier(.4,0,.2,1)', pseudoElement: '::view-transition-new(root)' }
+                );
+            }).catch(err => console.warn('配色の切り替えアニメーションを実行できませんでした:', err));
+        }
+
+        function cycleTheme(originEl) {
+            const next = THEME_MODES[(THEME_MODES.indexOf(themeMode()) + 1) % THEME_MODES.length];
+            setTheme(next, originEl);
+            Activity.toast(`配色: ${THEME_META[next].label}`, 'update');
+        }
+
+        // ---------- Sound (D8) ----------
+        const sfx = (() => {
+            let ctx = null;
+            const ensure = () => {
+                const AC = window.AudioContext || window.webkitAudioContext;
+                if (!AC) return null;
+                if (!ctx) ctx = new AC();
+                if (ctx.state === 'suspended') ctx.resume();
+                return ctx;
+            };
+            const tone = (freq, dur, { type = 'sine', vol = .03, at = 0, slide = 0 } = {}) => {
+                const c = ensure();
+                if (!c) return;
+                const t0 = c.currentTime + at;
+                const o = c.createOscillator();
+                const g = c.createGain();
+                o.type = type;
+                o.frequency.setValueAtTime(freq, t0);
+                if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq * slide), t0 + dur);
+                g.gain.setValueAtTime(.0001, t0);
+                g.gain.exponentialRampToValueAtTime(vol, t0 + .008);
+                g.gain.exponentialRampToValueAtTime(.0001, t0 + dur);
+                o.connect(g).connect(c.destination);
+                o.start(t0);
+                o.stop(t0 + dur + .02);
+            };
+            const noise = (dur, { vol = .02, from = 400, to = 2400, at = 0 } = {}) => {
+                const c = ensure();
+                if (!c) return;
+                const t0 = c.currentTime + at;
+                const len = Math.floor(c.sampleRate * dur);
+                const buf = c.createBuffer(1, len, c.sampleRate);
+                const data = buf.getChannelData(0);
+                for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+                const src = c.createBufferSource();
+                src.buffer = buf;
+                const bp = c.createBiquadFilter();
+                bp.type = 'bandpass';
+                bp.Q.value = 2;
+                bp.frequency.setValueAtTime(from, t0);
+                bp.frequency.exponentialRampToValueAtTime(to, t0 + dur);
+                const g = c.createGain();
+                g.gain.setValueAtTime(.0001, t0);
+                g.gain.exponentialRampToValueAtTime(vol, t0 + dur * .4);
+                g.gain.exponentialRampToValueAtTime(.0001, t0 + dur);
+                src.connect(bp).connect(g).connect(c.destination);
+                src.start(t0);
+                src.stop(t0 + dur + .02);
+            };
+            const sounds = {
+                blip: () => tone(880, .05),
+                tick: () => tone(1600, .02, { vol: .012 }),
+                data: () => tone(2100, .02, { vol: .01 }),
+                confirm: () => { tone(660, .06, { vol: .035 }); tone(990, .1, { at: .06, vol: .03 }); },
+                transfer: () => { noise(.32); tone(320, .32, { vol: .02, slide: 3 }); },
+                lock: () => { tone(1320, .04); tone(1320, .04, { at: .08 }); tone(1760, .16, { at: .16, vol: .025 }); },
+                warn: () => { tone(220, .08, { type: 'triangle', vol: .05 }); tone(220, .08, { type: 'triangle', vol: .05, at: .12 }); },
+                chain: n => tone(520 * 2 ** (Math.min(n, 12) / 12), .07, { vol: .035 }),
+                log: () => { tone(1046, .06, { vol: .025 }); tone(1568, .14, { at: .07, vol: .02 }); },
+                level: () => [523, 784, 1046, 1568].forEach((fq, i) => tone(fq, .24, { at: i * .09, vol: .03 })),
+                scan: () => noise(.9, { vol: .012, from: 300, to: 1800 })
+            };
+            return {
+                unlock: ensure,
+                play(name, n = 0) {
+                    if (!fx.D8 || !sounds[name]) return;
+                    try { sounds[name](n); } catch (err) { console.warn('効果音を再生できませんでした:', err); }
+                }
+            };
+        })();
+
+        // ---------- Primitives ----------
+        function makeGhost(el, r) {
+            const g = el.cloneNode(true);
+            g.classList.add('ghost');
+            g.classList.remove('dragging');
+            Object.assign(g.style, { width: `${r.width}px`, height: `${r.height}px`, transform: `translate(${r.left}px, ${r.top}px)`, visibility: 'visible' });
+            document.body.appendChild(g);
+            return g;
+        }
+
+        function ghostOut(el, r) {
+            const g = makeGhost(el, r);
+            g.animate([
+                { clipPath: 'inset(0 0 0 0)', opacity: 1 },
+                { clipPath: 'inset(48% 0 48% 0)', opacity: .6 }
+            ], { duration: 220, easing: 'ease-in', fill: 'forwards' }).onfinish = () => g.remove();
+        }
+
+        function materialize(el, delay = 0) {
+            if (reducedMotion()) return;
+            const scan = document.createElement('span');
+            scan.className = 'scanline';
+            el.appendChild(scan);
+            const timing = { duration: 460, delay, easing: 'cubic-bezier(.3,.6,.2,1)' };
+            el.animate([
+                { clipPath: 'inset(0 0 100% 0)', filter: 'brightness(1.8)' },
+                { clipPath: 'inset(0 0 0% 0)', filter: 'brightness(1)' }
+            ], { ...timing, fill: 'backwards' });
+            scan.animate([
+                { top: '0%', opacity: 0 }, { top: '3%', opacity: 1, offset: .05 },
+                { top: '100%', opacity: 1, offset: .9 }, { top: '100%', opacity: 0 }
+            ], { ...timing, fill: 'both' }).onfinish = () => scan.remove();
+        }
+
+        function reveal(cards) {
+            if (!on('A5')) return;
+            cards.filter(isShown).forEach((el, i) => materialize(el, Math.min(i * 40, 900)));
+        }
+
+        function beam(a, b, color, dur = 320) {
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const l = document.createElement('span');
+            l.className = 'beam';
+            l.style.width = `${Math.hypot(dx, dy)}px`;
+            l.style.background = color;
+            l.style.boxShadow = `0 0 10px ${color}`;
+            document.body.appendChild(l);
+            const base = `translate(${a.x}px, ${a.y - 1}px) rotate(${Math.atan2(dy, dx)}rad)`;
+            l.animate([
+                { transform: `${base} scaleX(0)`, opacity: 1 },
+                { transform: `${base} scaleX(1)`, opacity: 1, offset: .6 },
+                { transform: `${base} scaleX(1)`, opacity: 0 }
+            ], { duration: dur * 1.7, easing: 'cubic-bezier(.4,0,.2,1)' }).onfinish = () => l.remove();
+            const p = document.createElement('span');
+            p.className = 'packet';
+            p.style.background = color;
+            document.body.appendChild(p);
+            p.animate([
+                { transform: `translate(${a.x - 2.5}px, ${a.y - 2.5}px)` },
+                { transform: `translate(${b.x - 2.5}px, ${b.y - 2.5}px)` }
+            ], { duration: dur, easing: 'cubic-bezier(.5,0,.5,1)' }).onfinish = () => p.remove();
+            return new Promise(resolve => setTimeout(resolve, dur));
+        }
+
+        function ring(x, y, color) {
+            if (!on('D9') || reducedMotion()) return;
+            const r = document.createElement('span');
+            r.className = 'ring';
+            r.style.borderColor = color;
+            document.body.appendChild(r);
+            r.animate([
+                { transform: `translate(${x - 12}px, ${y - 12}px) scale(.3)`, opacity: .9 },
+                { transform: `translate(${x - 12}px, ${y - 12}px) scale(5)`, opacity: 0 }
+            ], { duration: 620, easing: 'cubic-bezier(.1,.7,.3,1)' }).onfinish = () => r.remove();
+        }
+
+        function edgeGlow(column) {
+            if (!column || reducedMotion()) return;
+            column.animate([
+                { boxShadow: '0 0 0 1px var(--col-color), 0 0 30px -6px var(--col-color)' },
+                { boxShadow: '0 0 0 0 rgba(0,0,0,0), 0 0 0 0 rgba(0,0,0,0)' }
+            ], { duration: 800, easing: 'ease-out' });
+        }
+
+        function savedFlash(el) {
+            if (!el || reducedMotion()) return;
+            el.querySelector('.card-face').animate([
+                { boxShadow: '0 0 0 1px var(--accent), 0 0 26px -4px var(--accent-glow)' },
+                { boxShadow: 'var(--shadow-card)' }
+            ], { duration: 700, easing: 'ease-out' });
+        }
+
+        function glitch(el) {
+            if (!el || !on('B4')) return;
+            sfx.play('warn');
+            const face = el.querySelector('.card-face');
+            if (!reducedMotion()) {
+                face.animate([
+                    { transform: 'none', filter: 'none' },
+                    { transform: 'translateX(-3px)', filter: 'drop-shadow(2px 0 0 rgba(240,82,82,.85)) drop-shadow(-2px 0 0 rgba(34,211,238,.85))', offset: .2 },
+                    { transform: 'translateX(3px)', filter: 'drop-shadow(-3px 0 0 rgba(240,82,82,.85)) drop-shadow(3px 0 0 rgba(34,211,238,.85))', offset: .45 },
+                    { transform: 'translateX(-1px)', offset: .7 },
+                    { transform: 'none', filter: 'none' }
+                ], { duration: 340 });
+            }
+            face.classList.remove('alert');
+            void face.offsetWidth; // restart animation
+            face.classList.add('alert');
+            setTimeout(() => face.classList.remove('alert'), 750);
+        }
+
+        function lockOn(el, crit) {
+            if (!el || !on('D3') || reducedMotion()) return;
+            const r = el.getBoundingClientRect();
+            const color = crit ? 'var(--amber)' : 'var(--ok)';
+            const k = document.createElement('span');
+            k.className = 'lock';
+            k.style.setProperty('--c', color);
+            Object.assign(k.style, { left: `${r.left - 6}px`, top: `${r.top - 6}px`, width: `${r.width + 12}px`, height: `${r.height + 12}px` });
+            document.body.appendChild(k);
+            k.animate([
+                { transform: 'scale(1.3)', opacity: 0 },
+                { transform: 'scale(1)', opacity: 1, offset: .25 },
+                { transform: 'scale(1)', opacity: 1, offset: .85 },
+                { transform: 'scale(1)', opacity: 0 }
+            ], { duration: 1600, easing: EASE }).onfinish = () => k.remove();
+            const label = document.createElement('span');
+            label.className = 'lock-label';
+            label.style.color = color;
+            label.textContent = crit ? 'PRIORITY TASK COMPLETE' : 'TASK COMPLETE';
+            Object.assign(label.style, { left: `${r.left - 6}px`, top: `${Math.max(4, r.top - 30)}px` });
+            document.body.appendChild(label);
+            label.animate([
+                { clipPath: 'inset(0 100% 0 0)', opacity: 1 },
+                { clipPath: 'inset(0 0 0 0)', opacity: 1, offset: .22 },
+                { clipPath: 'inset(0 0 0 0)', opacity: 1, offset: .85 },
+                { clipPath: 'inset(0 0 0 0)', opacity: 0 }
+            ], { duration: 1600, delay: 160, easing: 'linear', fill: 'backwards' }).onfinish = () => label.remove();
+            setTimeout(() => sfx.play('lock'), 140);
+        }
+
+        function scanSweep() {
+            if (!on('C1') || reducedMotion()) return;
+            const grid = document.getElementById('kanban-container');
+            const br = grid.getBoundingClientRect();
+            const dur = 1100;
+            const s = document.createElement('span');
+            s.className = 'sweep';
+            s.style.top = `${Math.max(0, br.top)}px`;
+            s.style.height = `${Math.min(innerHeight, br.bottom) - Math.max(0, br.top)}px`;
+            document.body.appendChild(s);
+            s.animate([
+                { transform: `translateX(${br.left}px)`, opacity: 0 },
+                { opacity: 1, offset: .06 }, { opacity: 1, offset: .94 },
+                { transform: `translateX(${br.right}px)`, opacity: 0 }
+            ], { duration: dur, easing: 'linear' }).onfinish = () => s.remove();
+            sfx.play('scan');
+            grid.querySelectorAll('.task-card .card-face, .column-header').forEach(f => {
+                const r = f.getBoundingClientRect();
+                if (!r.width) return;
+                f.animate([
+                    { filter: 'brightness(1)' },
+                    { filter: 'brightness(1.4)', boxShadow: '0 0 0 1px var(--accent), 0 0 22px -6px var(--accent-glow)', offset: .2 },
+                    { filter: 'brightness(1)' }
+                ], { duration: 600, delay: ((r.left - br.left) / br.width) * dur });
+            });
+        }
+
+        function popNum(x, y, text, sub, accent) {
+            if (reducedMotion()) return;
+            const p = document.createElement('div');
+            p.className = 'pop-num';
+            if (accent) p.style.color = accent;
+            if (sub) {
+                const s = document.createElement('small');
+                s.textContent = sub;
+                p.appendChild(s);
+            }
+            p.appendChild(document.createTextNode(text));
+            document.body.appendChild(p);
+            const at = dy => `translate(${x}px, ${y + dy}px) translate(-50%, -100%)`;
+            p.animate([
+                { transform: at(4), opacity: 0 },
+                { transform: at(0), opacity: 1, offset: .15 },
+                { transform: at(-22), opacity: 1, offset: .75 },
+                { transform: at(-30), opacity: 0 }
+            ], { duration: 1100, easing: 'ease-out' }).onfinish = () => p.remove();
+        }
+
+        /** Small squares flying from (x, y) to target; onDone runs when the last one lands */
+        function packets(x, y, n, target, onDone) {
+            if (reducedMotion()) { if (onDone) onDone(); return; }
+            let left = n;
+            for (let i = 0; i < n; i++) {
+                const p = document.createElement('span');
+                p.className = 'packet';
+                document.body.appendChild(p);
+                const mx = x + rand(-70, 70);
+                const my = y + rand(-70, -20);
+                p.animate([
+                    { transform: `translate(${x - 2.5}px, ${y - 2.5}px)`, opacity: 0 },
+                    { transform: `translate(${mx - 2.5}px, ${my - 2.5}px)`, opacity: 1, offset: .35 },
+                    { transform: `translate(${target.x - 2.5}px, ${target.y - 2.5}px)`, opacity: .8 }
+                ], { duration: 720 + i * 45, delay: 80, easing: 'cubic-bezier(.5,0,.6,1)', fill: 'backwards' }).onfinish = () => {
+                    p.remove();
+                    sfx.play('data');
+                    if (--left === 0 && onDone) onDone();
+                };
+            }
+        }
+
+        function logToast(kicker, name, desc) {
+            const stack = document.getElementById('logStack')
+                || document.body.appendChild(Object.assign(document.createElement('div'), { id: 'logStack', className: 'log-stack' }));
+            const t = document.createElement('div');
+            t.className = 'log';
+            t.innerHTML = '<span class="log-k"></span><span class="log-name"></span><span class="log-desc"></span>';
+            t.querySelector('.log-k').textContent = kicker;
+            t.querySelector('.log-name').textContent = name;
+            t.querySelector('.log-desc').textContent = desc;
+            stack.appendChild(t);
+            sfx.play('log');
+            t.animate([
+                { transform: 'translateX(16px)', opacity: 0, clipPath: 'inset(0 0 0 100%)' },
+                { transform: 'none', opacity: 1, clipPath: 'inset(0 0 0 0)' }
+            ], { duration: 320, easing: EASE });
+            setTimeout(() => {
+                t.animate([{ opacity: 1 }, { opacity: 0, transform: 'translateX(16px)' }], { duration: 280, easing: 'ease-in', fill: 'forwards' }).onfinish = () => t.remove();
+            }, 3400);
+        }
+
+        // ---------- FLIP (A1) ----------
+        /** Record card rects (and elements) before the board is rebuilt */
+        function capture(root) {
+            const snapshot = new Map();
+            root.querySelectorAll('.task-card').forEach(c => {
+                const r = c.getBoundingClientRect();
+                if (!r.width) return;
+                snapshot.set(idAlias.get(c.dataset.id) || c.dataset.id, { rect: r, el: c });
+            });
+            idAlias.clear();
+            return snapshot;
+        }
+
+        /** Animate cards from their captured positions to the new layout */
+        function play(snapshot, root) {
+            const skip = new Set(flipSkip);
+            flipSkip.clear();
+            if (booting || holo || !snapshot.size || reducedMotion()) return;
+            const present = new Set();
+            let k = 0;
+            root.querySelectorAll('.task-card').forEach(el => {
+                const id = el.dataset.id;
+                present.add(id);
+                if (skip.has(id)) return;
+                const l = el.getBoundingClientRect();
+                if (!l.width) return;
+                const prev = snapshot.get(id);
+                if (!prev) {
+                    if (on('A5')) materialize(el);
+                    return;
+                }
+                if (!on('A1')) return;
+                const dx = prev.rect.left - l.left;
+                const dy = prev.rect.top - l.top;
+                if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+                el.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }],
+                    { duration: 440, delay: Math.min(k++ * 14, 160), easing: EASE, fill: 'backwards' });
+            });
+            if (!on('A1')) return;
+            snapshot.forEach((prev, id) => {
+                if (!present.has(id) && !skip.has(id)) ghostOut(prev.el, prev.rect);
+            });
+        }
+
+        const skipNext = id => flipSkip.add(String(id));
+        const aliasId = (oldId, newId) => idAlias.set(String(oldId), String(newId));
+
+        // ---------- A3: transfer to the done column ----------
+        function transfer(cardEl, taskId, applyChange, { toDone, crit }) {
+            const id = String(taskId);
+            const from = cardEl.getBoundingClientRect();
+            if (!on('A3') || reducedMotion()) {
+                applyChange();
+                arrive(id, toDone, crit);
+                return;
+            }
+            const ghost = makeGhost(cardEl, from);
+            skipNext(id);
+            applyChange();
+            const target = findCard(id);
+            const shown = isShown(target);
+            const dest = shown ? target : document.getElementById(toDone ? 'toggleDoneBtn' : 'kanban-container');
+            if (shown) target.style.visibility = 'hidden';
+            const color = toDone ? 'var(--ok)' : 'var(--accent)';
+            sfx.play('transfer');
+            ghost.animate([
+                { clipPath: 'inset(0 0 0 0)', filter: 'brightness(1)', opacity: 1 },
+                { clipPath: 'inset(47% 0 47% 0)', filter: 'brightness(2)', opacity: 1, offset: .6 },
+                { clipPath: 'inset(49.5% 46% 49.5% 46%)', filter: 'brightness(2.4)', opacity: 0 }
+            ], { duration: 280, easing: 'cubic-bezier(.5,0,.6,1)', fill: 'forwards' }).onfinish = () => {
+                ghost.remove();
+                beam(center(from), center(dest.getBoundingClientRect()), color).then(() => {
+                    const el = findCard(id);
+                    if (shown && el) {
+                        el.style.visibility = '';
+                        materialize(el);
+                        setTimeout(() => arrive(id, toDone, crit), 360);
+                    } else {
+                        dest.animate([
+                            { boxShadow: `0 0 0 1px ${color}, 0 0 18px -2px ${color}` },
+                            { boxShadow: '0 0 0 0 rgba(0,0,0,0), 0 0 0 0 rgba(0,0,0,0)' }
+                        ], { duration: 700, easing: 'ease-out' });
+                        sfx.play('confirm');
+                    }
+                });
+            };
+        }
+
+        function arrive(id, toDone, crit) {
+            const el = findCard(id);
+            if (!isShown(el)) return;
+            edgeGlow(el.closest('.kanban-column'));
+            const r = el.getBoundingClientRect();
+            ring(r.left + r.width / 2, r.bottom, toDone ? 'var(--ok)' : 'var(--accent)');
+            if (toDone && on('D3')) lockOn(el, crit);
+            else sfx.play('confirm');
+        }
+
+        // ---------- B3: label roll ----------
+        function roll(labelEl, prevIdx, nextIdx, symHeight) {
+            const strip = labelEl.querySelector('.label-strip');
+            strip.style.transform = `translateY(${-(5 + nextIdx) * symHeight}px)`;
+            if (!on('B3') || reducedMotion()) { sfx.play('tick'); return; }
+            [0, 50, 100, 160, 230].forEach(ms => setTimeout(() => sfx.play('tick'), ms));
+            strip.animate([
+                { transform: `translateY(${-(5 + prevIdx) * symHeight}px)`, filter: 'blur(0px)' },
+                { filter: 'blur(1.2px)', offset: .4 },
+                { transform: `translateY(${-(10 + nextIdx) * symHeight}px)`, filter: 'blur(0px)' }
+            ], { duration: 420, easing: 'cubic-bezier(.3,0,.2,1)' });
+        }
+
+        // ---------- B1: wake dormant cards / A6: aim glare ----------
+        function wake(card) {
+            if (!on('B1') || card.classList.contains('awake') || drag) return;
+            const badge = card.querySelector('.dormant-badge');
+            const original = badge ? badge.innerHTML : '';
+            card.classList.add('awake');
+            if (badge) badge.innerHTML = '<i class="dot"></i>ONLINE';
+            if (!reducedMotion()) {
+                card.querySelector('.card-face').animate([{ filter: 'brightness(1.7)' }, { filter: 'brightness(1)' }], { duration: 500, easing: 'ease-out' });
+            }
+            sfx.play('confirm');
+            if (typeof Hud !== 'undefined') Hud.event('wake');
+            setTimeout(() => {
+                card.classList.remove('awake');
+                if (badge) badge.innerHTML = original;
+            }, 3500);
+        }
+
+        function setupHover(container) {
+            let aimed = null;
+            container.addEventListener('pointerover', e => {
+                if (e.pointerType !== 'mouse') return;
+                const card = e.target.closest('.task-card.dormant');
+                if (card && !card.contains(e.relatedTarget)) wake(card);
+            });
+            container.addEventListener('pointermove', e => {
+                if (e.pointerType !== 'mouse' || drag || !on('A6')) return;
+                const face = e.target.closest('.card-face');
+                if (aimed && aimed !== face) aimed.classList.remove('aiming');
+                aimed = face;
+                if (!face) return;
+                const r = face.getBoundingClientRect();
+                face.classList.add('aiming');
+                face.style.setProperty('--mx', `${((e.clientX - r.left) / r.width) * 100}%`);
+                face.style.setProperty('--my', `${((e.clientY - r.top) / r.height) * 100}%`);
+            });
+            container.addEventListener('pointerleave', () => {
+                if (aimed) aimed.classList.remove('aiming');
+                aimed = null;
+            });
+        }
+
+        // ---------- A2: drag ----------
+        let press = null;
+        let drag = null;
+        let dragEndedAt = 0;
+        let onDropHandler = null;
+
+        const NO_DRAG = 'a, button, input, select, textarea, .card-label, .card-check, .drive-chip, .url-inline-link';
+
+        function setupDrag(container, onDrop) {
+            onDropHandler = onDrop;
+            container.addEventListener('pointerdown', e => {
+                const card = e.target.closest('.task-card');
+                if (!card || e.button !== 0 || drag || grav || e.target.closest(NO_DRAG)) return;
+                press = { card, x: e.clientX, y: e.clientY, lastX: e.clientX, lastY: e.clientY, type: e.pointerType, timer: 0 };
+                if (e.pointerType === 'mouse') e.preventDefault();
+                if (e.pointerType === 'touch' && !holo) {
+                    press.timer = setTimeout(() => { if (press && !drag) beginDrag(press.lastX, press.lastY); }, 300);
+                }
+            });
+            container.addEventListener('touchmove', e => { if (drag) e.preventDefault(); }, { passive: false });
+            window.addEventListener('pointermove', e => {
+                if (!press) return;
+                press.lastX = e.clientX;
+                press.lastY = e.clientY;
+                if (!drag) {
+                    const d = Math.hypot(e.clientX - press.x, e.clientY - press.y);
+                    if (press.type === 'touch') {
+                        if (d > 10) { clearTimeout(press.timer); press = null; }
+                    } else if (d > 6 && !holo) {
+                        beginDrag(e.clientX, e.clientY);
+                    }
+                    return;
+                }
+                drag.px = e.clientX;
+                drag.py = e.clientY;
+            });
+            window.addEventListener('pointerup', () => endPress());
+            window.addEventListener('pointercancel', () => endPress());
+        }
+
+        function endPress() {
+            if (!press) return;
+            clearTimeout(press.timer);
+            press = null;
+            if (drag) endDrag();
+        }
+
+        /** True right after a drag, so the card's click handler can ignore the synthetic click */
+        const consumeClick = () => performance.now() - dragEndedAt < 400;
+
+        function beginDrag(x, y) {
+            const card = press.card;
+            const r = card.getBoundingClientRect();
+            const face = card.querySelector('.card-face');
+            if (face) face.classList.remove('aiming');
+            const ph = document.createElement('div');
+            ph.className = 'placeholder';
+            ph.style.height = `${r.height}px`;
+            const fromList = card.parentElement;
+            const fromIndex = [...fromList.children].indexOf(card);
+            fromList.insertBefore(ph, card);
+            document.body.appendChild(card);
+            card.classList.add('dragging');
+            card.style.width = `${r.width}px`;
+            card.style.height = `${r.height}px`;
+            document.body.classList.add('sorting-active');
+            drag = { card, ph, fromList, fromIndex, offX: x - r.left, offY: y - r.top, px: x, py: y, lastX: r.left, rot: 0, scale: 1, raf: 0 };
+            sfx.play('tick');
+            dragLoop();
+        }
+
+        function dragLoop() {
+            const d = drag;
+            const tx = d.px - d.offX;
+            const ty = d.py - d.offY;
+            const vx = tx - d.lastX;
+            d.lastX = tx;
+            if (on('A2') && !reducedMotion()) {
+                d.rot += (clamp(vx * .6, -6, 6) - d.rot) * .15;
+                d.scale += (1.03 - d.scale) * .2;
+            } else {
+                d.rot = 0;
+                d.scale = 1;
+            }
+            d.card.style.transform = `translate(${tx}px, ${ty}px) rotate(${d.rot}deg) scale(${d.scale})`;
+            updatePlaceholder(d.px, d.py);
+            d.raf = requestAnimationFrame(dragLoop);
+        }
+
+        function updatePlaceholder(px, py) {
+            const columns = [...document.querySelectorAll('#kanban-container .kanban-column:not(.hidden)')];
+            let best = null;
+            let bestDist = Infinity;
+            columns.forEach(col => {
+                const r = col.getBoundingClientRect();
+                const dist = px < r.left ? r.left - px : px > r.right ? px - r.right : 0;
+                if (dist < bestDist) { bestDist = dist; best = col; }
+            });
+            columns.forEach(col => col.classList.toggle('drop-target', col === best));
+            if (!best) return;
+            const list = best.querySelector('.task-list');
+            const lr = list.getBoundingClientRect();
+            if (py > lr.bottom - 40) list.scrollTop += 12;
+            else if (py < lr.top + 40) list.scrollTop -= 12;
+            const x = px - lr.left + list.scrollLeft;
+            const y = py - lr.top + list.scrollTop;
+            const cards = [...list.querySelectorAll(':scope > .task-card')];
+            const perRow = cards.filter(c => cards.length && c.offsetTop === cards[0].offsetTop).length;
+            const before = cards.find(c => perRow <= 1
+                ? y < c.offsetTop + c.offsetHeight / 2
+                : y < c.offsetTop || (y <= c.offsetTop + c.offsetHeight && x < c.offsetLeft + c.offsetWidth / 2)) || null;
+            const { ph } = drag;
+            if (ph.parentNode === list && ph.nextElementSibling === before) return;
+            flipMove(() => list.insertBefore(ph, before));
+        }
+
+        function flipMove(fn) {
+            if ((!on('A2') && !on('A1')) || reducedMotion()) { fn(); return; }
+            const cards = [...document.querySelectorAll('#kanban-container .task-list > .task-card')];
+            const first = cards.map(c => c.getBoundingClientRect());
+            fn();
+            cards.forEach((c, i) => {
+                const l = c.getBoundingClientRect();
+                const dx = first[i].left - l.left;
+                const dy = first[i].top - l.top;
+                if (Math.abs(dx) + Math.abs(dy) < 1) return;
+                c.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: 240, easing: EASE });
+            });
+        }
+
+        function endDrag() {
+            const d = drag;
+            cancelAnimationFrame(d.raf);
+            drag = null;
+            document.body.classList.remove('sorting-active');
+            document.querySelectorAll('#kanban-container .kanban-column').forEach(c => c.classList.remove('drop-target'));
+            const pr = d.ph.getBoundingClientRect();
+            const finish = () => {
+                const toList = d.ph.parentElement;
+                const toIndex = [...toList.children].indexOf(d.ph);
+                d.ph.replaceWith(d.card);
+                d.card.classList.remove('dragging');
+                d.card.style.width = d.card.style.height = d.card.style.transform = '';
+                dragEndedAt = performance.now();
+                if (toList === d.fromList && toIndex === d.fromIndex) return;
+                const id = d.card.dataset.id;
+                const fromStatus = d.fromList.closest('.kanban-column').dataset.status;
+                const toStatus = toList.closest('.kanban-column').dataset.status;
+                if (onDropHandler) onDropHandler();
+                landed(id, fromStatus, toStatus);
+            };
+            if (!on('A2') || reducedMotion()) { finish(); return; }
+            const cur = d.card.style.transform;
+            const target = `translate(${pr.left}px, ${pr.top}px) rotate(0deg) scale(1)`;
+            d.card.style.transform = target;
+            d.card.animate([{ transform: cur }, { transform: target }], { duration: 200, easing: EASE }).onfinish = finish;
+        }
+
+        function landed(id, fromStatus, toStatus) {
+            const el = findCard(id);
+            if (!isShown(el)) return;
+            const moved = fromStatus !== toStatus;
+            if (on('A2') && !reducedMotion()) {
+                el.animate([{ transform: 'translateY(-4px) scale(1.015)' }, { transform: 'none' }], { duration: 280, easing: EASE });
+                const cards = [...el.parentElement.querySelectorAll(':scope > .task-card')];
+                const idx = cards.indexOf(el);
+                cards.forEach((c, j) => {
+                    if (j === idx) return;
+                    const dist = j - idx;
+                    c.animate([
+                        { transform: 'translate(0, 0)' },
+                        { transform: `translate(0, ${Math.sign(dist) * 4 / Math.abs(dist)}px)`, offset: .35 },
+                        { transform: 'translate(0, 0)' }
+                    ], { duration: 360, delay: Math.abs(dist) * 35, easing: 'ease-out', composite: 'add' });
+                });
+                if (moved) edgeGlow(el.closest('.kanban-column'));
+            }
+            if (!moved) return;
+            const r = el.getBoundingClientRect();
+            const toDone = toStatus === '完了';
+            ring(r.left + r.width / 2, r.bottom, toDone ? 'var(--ok)' : 'var(--accent)');
+            if (toDone && on('D3')) lockOn(el, el.classList.contains('priority-high'));
+            else sfx.play('confirm');
+        }
+
+        // ---------- A4: expand the editor from the card ----------
+        function expandFrom(contentEl, sourceEl) {
+            contentEl.getAnimations({ subtree: true }).forEach(anim => anim.cancel());
+            if (!on('A4') || !isShown(sourceEl) || reducedMotion()) return;
+            const r = sourceEl.getBoundingClientRect();
+            const fr = contentEl.getBoundingClientRect();
+            if (!fr.width) return;
+            contentEl.animate([
+                { transform: `translate(${r.left - fr.left}px, ${r.top - fr.top}px) scale(${r.width / fr.width}, ${r.height / fr.height})`, opacity: .4 },
+                { transform: 'none', opacity: 1 }
+            ], { duration: 380, easing: EASE });
+            [...contentEl.children].forEach(child => child.animate([{ opacity: 0 }, { opacity: 0, offset: .4 }, { opacity: 1 }], { duration: 380 }));
+        }
+
+        function collapseTo(contentEl, targetEl, done) {
+            if (!on('A4') || !isShown(targetEl) || reducedMotion()) { done(); return; }
+            const r = targetEl.getBoundingClientRect();
+            const fr = contentEl.getBoundingClientRect();
+            const a = contentEl.animate([
+                { transform: 'none', opacity: 1 },
+                { transform: `translate(${r.left - fr.left}px, ${r.top - fr.top}px) scale(${r.width / fr.width}, ${r.height / fr.height})`, opacity: .2 }
+            ], { duration: 320, easing: EASE, fill: 'forwards' });
+            [...contentEl.children].forEach(child => child.animate([{ opacity: 1 }, { opacity: 0, offset: .5 }, { opacity: 0 }], { duration: 320, fill: 'forwards' }));
+            a.onfinish = () => {
+                done();
+                // Keep the folded state until the overlay has faded out, then reset for the next open
+                setTimeout(() => {
+                    if (!contentEl.closest('.modal-overlay.show')) contentEl.getAnimations({ subtree: true }).forEach(anim => anim.cancel());
+                }, 350);
+            };
+        }
+
+        // ---------- C2: holo ----------
+        function setHolo(value) {
+            if (value && !on('C2')) { Activity.toast('「俯瞰モード」は演出設定で OFF になっています', 'update'); return; }
+            holo = value;
+            document.getElementById('boardMain').classList.toggle('holo', value);
+            const btn = document.getElementById('holoBtn');
+            if (btn) btn.setAttribute('aria-pressed', String(value));
+            sfx.play(value ? 'scan' : 'blip');
+            if (value && typeof Hud !== 'undefined') Hud.event('holo');
+        }
+
+        // ---------- C4: gravity ----------
+        function startGravity() {
+            if (grav || drag) return;
+            if (document.getElementById('taskModal').classList.contains('show')) return;
+            if (!on('C4')) { Activity.toast('「重力モード」は演出設定で OFF になっています', 'update'); return; }
+            if (!window.Matter) { Activity.toast('物理演算ライブラリを読み込めませんでした。通信状況を確認して再読み込みしてください', 'update'); return; }
+            if (holo) { setHolo(false); setTimeout(startGravity, 820); return; }
+            const { Engine, Bodies, Body, Composite, Events, Mouse, MouseConstraint } = window.Matter;
+            const engine = Engine.create();
+            engine.gravity.y = 1.1;
+            const W = innerWidth;
+            const H = innerHeight;
+            const layer = document.createElement('div');
+            layer.className = 'gravity-layer';
+            layer.innerHTML = '<p class="gravity-hint"><span>GRAVITY ENABLED</span>カードを掴んで投げられます</p>';
+            document.body.appendChild(layer);
+            const items = [...document.querySelectorAll('#kanban-container .task-card')].map(el => {
+                const r = el.getBoundingClientRect();
+                if (!r.width || r.bottom < 0 || r.top > H || r.right < 0 || r.left > W) return null;
+                const clone = el.cloneNode(true);
+                clone.classList.add('phys');
+                Object.assign(clone.style, { width: `${r.width}px`, height: `${r.height}px`, transform: `translate(${r.left}px, ${r.top}px)` });
+                layer.appendChild(clone);
+                el.style.visibility = 'hidden';
+                const body = Bodies.rectangle(r.left + r.width / 2, r.top + r.height / 2, r.width, r.height, {
+                    restitution: .3, friction: .4, frictionAir: .012, chamfer: { radius: 8 }
+                });
+                Body.setVelocity(body, { x: rand(-3, 3), y: rand(-5, 0) });
+                Body.setAngularVelocity(body, rand(-.05, .05));
+                return { el, clone, body, w: r.width, h: r.height };
+            }).filter(Boolean);
+            const T = 400;
+            const walls = [
+                Bodies.rectangle(W / 2, H + T / 2, W * 3, T, { isStatic: true }),
+                Bodies.rectangle(-T / 2, H / 2, T, H * 6, { isStatic: true }),
+                Bodies.rectangle(W + T / 2, H / 2, T, H * 6, { isStatic: true }),
+                Bodies.rectangle(W / 2, -T / 2 - 400, W * 3, T, { isStatic: true })
+            ];
+            const mouse = Mouse.create(layer);
+            const mc = MouseConstraint.create(engine, { mouse, constraint: { stiffness: .18, damping: .1 } });
+            Composite.add(engine.world, [...items.map(i => i.body), ...walls, mc]);
+            let lastHit = 0;
+            Events.on(engine, 'collisionStart', ev => {
+                const now = performance.now();
+                if (now - lastHit < 80) return;
+                const hard = ev.pairs.some(({ bodyA, bodyB }) => Math.hypot(bodyA.velocity.x - bodyB.velocity.x, bodyA.velocity.y - bodyB.velocity.y) > 5);
+                if (!hard) return;
+                lastHit = now;
+                sfx.play('tick');
+            });
+            const exit = document.createElement('button');
+            exit.type = 'button';
+            exit.className = 'btn primary gravity-exit';
+            exit.textContent = '元に戻す（Esc）';
+            exit.addEventListener('click', stopGravity);
+            document.body.appendChild(exit);
+            let last = performance.now();
+            const step = now => {
+                if (!grav) return;
+                Engine.update(engine, Math.min(32, now - last));
+                last = now;
+                items.forEach(it => {
+                    const { x, y } = it.body.position;
+                    it.clone.style.transform = `translate(${x - it.w / 2}px, ${y - it.h / 2}px) rotate(${it.body.angle}rad)`;
+                });
+                grav.raf = requestAnimationFrame(step);
+            };
+            grav = { engine, layer, exit, items, raf: 0 };
+            grav.raf = requestAnimationFrame(step);
+            sfx.play('transfer');
+            if (typeof Hud !== 'undefined') Hud.event('gravity');
+        }
+
+        function stopGravity() {
+            if (!grav) return;
+            const g = grav;
+            grav = null;
+            cancelAnimationFrame(g.raf);
+            g.exit.remove();
+            g.layer.style.pointerEvents = 'none';
+            window.Matter.Engine.clear(g.engine);
+            sfx.play('confirm');
+            if (!g.items.length) { g.layer.remove(); return; }
+            let left = g.items.length;
+            g.items.forEach((it, i) => {
+                const r = it.el.getBoundingClientRect();
+                it.clone.animate([
+                    { transform: it.clone.style.transform },
+                    { transform: `translate(${r.left}px, ${r.top}px) rotate(0rad)` }
+                ], { duration: 640, delay: i * 30, easing: EASE, fill: 'forwards' }).onfinish = () => {
+                    it.el.style.visibility = '';
+                    it.clone.remove();
+                    if (--left === 0) g.layer.remove();
+                };
+            });
+        }
+
+        // ---------- D10: boot sequence ----------
+        const boot = (() => {
+            let el = null;
+            let lines = null;
+            let startedAt = 0;
+            let done = { data: false, activity: false };
+            let closed = false;
+            let timer = 0;
+
+            function line(text, status) {
+                if (!lines) return;
+                const s = document.createElement('span');
+                s.textContent = text;
+                if (status) {
+                    const em = document.createElement('em');
+                    em.textContent = status;
+                    if (status !== 'OK') em.className = 'ng';
+                    s.appendChild(em);
+                }
+                lines.appendChild(s);
+                s.animate([{ clipPath: 'inset(0 100% 0 0)' }, { clipPath: 'inset(0 0 0 0)' }], { duration: 160, easing: 'steps(16, end)' });
+            }
+
+            function start() {
+                if (!on('D10') || reducedMotion()) return false;
+                booting = true;
+                startedAt = performance.now();
+                el = document.createElement('div');
+                el.className = 'boot';
+                el.innerHTML = '<div class="boot-inner"><div class="boot-lines"></div><div class="boot-title">SYSTEM ONLINE</div><div class="boot-skip">クリックでスキップ</div></div>';
+                lines = el.querySelector('.boot-lines');
+                document.body.appendChild(el);
+                el.addEventListener('click', close);
+                line('MYTASK \/\/ OPERATIONS CONSOLE'); // escaped: HtmlService strips "//" even inside strings
+                line('> スプレッドシートに接続 ........ ');
+                return true;
+            }
+
+            function maybeFinish() {
+                if (closed || !done.data) return;
+                const elapsed = performance.now() - startedAt;
+                if (!done.activity && elapsed < 2600) {
+                    clearTimeout(timer);
+                    timer = setTimeout(maybeFinish, 2600 - elapsed);
+                    return;
+                }
+                el.querySelector('.boot-title').animate([
+                    { opacity: 0, letterSpacing: '.6em' }, { opacity: 1, offset: .3 }, { opacity: .4, offset: .45 }, { opacity: 1, letterSpacing: '.3em' }
+                ], { duration: 420, easing: EASE, fill: 'forwards' });
+                clearTimeout(timer);
+                timer = setTimeout(close, Math.max(0, 900 - elapsed) + 520);
+            }
+
+            function step(key, info) {
+                if (!el) {
+                    // Boot sequence is off: reveal the board once on the first data load
+                    if (key === 'data' && !done.data) {
+                        done.data = true;
+                        reveal([...document.querySelectorAll('#kanban-container .task-card')]);
+                    }
+                    return;
+                }
+                if (key === 'data') {
+                    if (closed) { if (booting) finishReveal(); return; }
+                    line(`> タスク ${info} 件を同期 ............ `, 'OK');
+                    done.data = true;
+                } else if (key === 'activity') {
+                    if (closed || done.activity) return;
+                    line('> アクティビティログを集計 ...... ', 'OK');
+                    done.activity = true;
+                }
+                maybeFinish();
+            }
+
+            function fail(message) {
+                if (!el || closed) return;
+                line(`> エラー: ${message} `, 'NG');
+                clearTimeout(timer);
+                timer = setTimeout(close, 1600);
+            }
+
+            function finishReveal() {
+                booting = false;
+                reveal([...document.querySelectorAll('#kanban-container .task-card')]);
+            }
+
+            function close() {
+                if (closed || !el) return;
+                closed = true;
+                clearTimeout(timer);
+                const node = el;
+                node.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 260, fill: 'forwards' }).onfinish = () => node.remove();
+                if (done.data) finishReveal();
+                else showLoading('loading-overlay', true);
+            }
+
+            return { start, step, fail, active: () => booting };
+        })();
+
+        // ---------- Settings panel ----------
+        function buildPanel() {
+            const body = document.getElementById('fxPanelBody');
+            const theme = document.createElement('section');
+            theme.className = 'fx-section';
+            theme.innerHTML = `<h3>THEME / 配色</h3><div class="seg" id="themeSeg">${THEME_MODES.map(m => `<button type="button" data-mode="${m}" aria-pressed="false">${THEME_META[m].label}</button>`).join('')}</div>`;
+            theme.querySelector('#themeSeg').addEventListener('click', e => {
+                const b = e.target.closest('button');
+                if (b) setTheme(b.dataset.mode, b);
+            });
+            body.appendChild(theme);
+
+            const actions = document.createElement('section');
+            actions.className = 'fx-section';
+            actions.innerHTML = '<h3>EFFECTS / 演出</h3><div class="fx-actions"><button type="button" class="btn secondary" data-all="on">すべて ON</button><button type="button" class="btn secondary" data-all="off">すべて OFF</button></div>';
+            actions.addEventListener('click', e => {
+                const b = e.target.closest('[data-all]');
+                if (!b) return;
+                FX_LIST.forEach(({ id }) => { fx[id] = b.dataset.all === 'on'; });
+                applyFx();
+                saveFx();
+            });
+            body.appendChild(actions);
+
+            Object.entries(FX_GROUPS).forEach(([g, title]) => {
+                const sec = document.createElement('section');
+                sec.className = 'fx-section';
+                sec.innerHTML = `<h3>${title}</h3>`;
+                FX_LIST.filter(x => x.group === g).forEach(x => {
+                    const row = document.createElement('label');
+                    row.className = 'fx-row';
+                    row.htmlFor = `fx-${x.id}`;
+                    row.innerHTML = `<span class="fx-id">${x.id}</span><span><span class="fx-name"></span><span class="fx-how"></span></span><input class="switch" type="checkbox" id="fx-${x.id}">`;
+                    row.querySelector('.fx-name').textContent = x.name;
+                    row.querySelector('.fx-how').textContent = x.how;
+                    row.querySelector('input').addEventListener('change', e => setFx(x.id, e.target.checked));
+                    sec.appendChild(row);
+                });
+                body.appendChild(sec);
+            });
+        }
+
+        const panelOpen = () => document.getElementById('fxPanel').classList.contains('show');
+        function togglePanel(show) {
+            document.getElementById('fxPanel').classList.toggle('show', show);
+        }
+
+        // ---------- Init ----------
+        function init() {
+            loadFx();
+            buildPanel();
+            applyTheme(themeMode());
+            applyFx();
+            window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+                if (themeMode() === 'auto') applyTheme('auto');
+            });
+
+            const closeMenu = () => document.getElementById('dropdownMenu').classList.remove('show');
+            document.getElementById('themeBtn').addEventListener('click', e => cycleTheme(e.currentTarget));
+            document.getElementById('holoBtn').addEventListener('click', () => { closeMenu(); setHolo(!holo); });
+            document.getElementById('gravityBtn').addEventListener('click', () => { closeMenu(); startGravity(); });
+            document.getElementById('soundBtn').addEventListener('click', e => { e.stopPropagation(); setFx('D8', !fx.D8); });
+            document.getElementById('fxSettingsBtn').addEventListener('click', e => { e.stopPropagation(); closeMenu(); togglePanel(true); });
+            document.getElementById('fxPanelClose').addEventListener('click', () => togglePanel(false));
+            document.getElementById('fxPanel').addEventListener('click', e => e.stopPropagation());
+            window.addEventListener('click', () => togglePanel(false));
+
+            const container = document.getElementById('kanban-container');
+            setupHover(container);
+
+            let gPresses = [];
+            window.addEventListener('keydown', e => {
+                if (e.key === 'Escape') {
+                    if (grav) stopGravity();
+                    else if (panelOpen()) togglePanel(false);
+                    else if (holo && !document.getElementById('taskModal').classList.contains('show')) setHolo(false);
+                    return;
+                }
+                if (e.key.toLowerCase() !== 'g' || e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+                const now = performance.now();
+                gPresses = [...gPresses.filter(ts => now - ts < 900), now];
+                if (gPresses.length < 3) return;
+                gPresses = [];
+                if (grav) stopGravity();
+                else startGravity();
+            });
+        }
+
+        return {
+            init, on, sfx, reducedMotion,
+            capture, play, skipNext, aliasId, findCard,
+            transfer, roll, glitch, savedFlash, materialize, scanSweep, lockOn,
+            popNum, packets, logToast, setupDrag, consumeClick,
+            expandFrom, collapseTo, boot,
+            isHolo: () => holo
+        };
+    })();
+</script>

@@ -1,0 +1,131 @@
+<!--
+  MyTask
+  https://github.com/blueshooterX/MyTask
+  
+  Copyright (c) 2026 blueshooterX
+  Licensed under the MIT License.
+-->
+
+<script>
+    /**
+     * UI Utilities (Reusable)
+     */
+
+    function generateColorFromHash(string) {
+        if (!string) return '#94a3b8'; // default slate color
+        // Same hue order as before, darkened for white-text contrast
+        const colors = [
+            '#4F46E5', '#DC2626', '#B45309', '#047857', '#1D4ED8', '#BE185D', '#7C3AED', '#0F766E',
+            '#C2410C', '#0E7490', '#4D7C0F', '#A21CAF', '#0369A1', '#15803D', '#A16207', '#475569'
+        ];
+
+        let hash = 0;
+        for (let i = 0; i < string.length; i++) {
+            hash = string.charCodeAt(i) + ((hash << 5) - hash);
+            hash = hash & hash;
+        }
+
+        const index = Math.abs(hash) % colors.length;
+        return colors[index];
+    }
+
+    function escapeHtml(value) {
+        const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+        return String(value ?? '').replace(/[&<>"']/g, c => map[c]);
+    }
+
+    function unescapeHtml(value) {
+        const map = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'" };
+        return String(value ?? '').replace(/&(amp|lt|gt|quot|#39);/g, m => map[m]);
+    }
+
+    const DAY_MS = 24 * 60 * 60 * 1000;
+
+    function startOfDay(date) {
+        return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    }
+
+    /**
+     * Calendar days elapsed since the given ISO string (0 = today)
+     */
+    function daysSince(iso, now = new Date()) {
+        const date = new Date(iso);
+        if (isNaN(date.getTime())) return null;
+        return Math.round((startOfDay(now) - startOfDay(date)) / DAY_MS);
+    }
+
+    /**
+     * Extract progress log lines that start with "(M/D)" / "（M/D）" / "M/D"
+     * Dates later than tomorrow are treated as the previous year.
+     * @returns {Array<{date: Date, text: string}>} sorted oldest first
+     */
+    function parseProgressEntries(raw, now = new Date()) {
+        const pattern = /^\s*[(（]?\s*(\d{1,2})\s*\/\s*(\d{1,2})\s*[)）]?/;
+        const limit = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+
+        return String(raw || '').split(/\r?\n/)
+            .map(line => ({ text: line.trim(), match: line.match(pattern) }))
+            .filter(({ match }) => match && +match[1] >= 1 && +match[1] <= 12 && +match[2] >= 1 && +match[2] <= 31)
+            .map(({ text, match }) => {
+                const candidate = new Date(now.getFullYear(), +match[1] - 1, +match[2]);
+                const date = candidate > limit ? new Date(now.getFullYear() - 1, +match[1] - 1, +match[2]) : candidate;
+                return { date, text };
+            })
+            .sort((a, b) => a.date - b.date);
+    }
+
+    function showLoading(elementId, show) {
+        const el = document.getElementById(elementId);
+        if (el) {
+            el.classList.toggle('show', show);
+        }
+    }
+
+    /**
+     * Generic Column Resizer
+     * @param {string} resizerSelector CSS selector for resizer elements
+     * @param {string} columnSelector CSS selector for column elements (relative to resizer)
+     * @param {HTMLElement} containerElement Container element
+     */
+    function setupColumnResizer(resizerSelector, columnSelector, containerElement) {
+        const resizers = document.querySelectorAll(resizerSelector);
+        const columns = document.querySelectorAll(columnSelector);
+        if (!containerElement) return;
+
+        // Initial width balance
+        const totalGap = (resizers.length * 8) + 40;
+        const initialWidth = (containerElement.offsetWidth - totalGap) / columns.length;
+        columns.forEach(col => {
+            if (initialWidth > 200) col.style.width = initialWidth + 'px';
+        });
+
+        resizers.forEach(resizer => {
+            let startX, startWidth;
+            const column = resizer.previousElementSibling;
+
+            resizer.addEventListener('mousedown', e => {
+                e.preventDefault(); // Prevent text selection highlight
+                startX = e.pageX;
+                startWidth = column.offsetWidth;
+                document.body.classList.add('is-resizing');
+
+                const onMouseMove = (moveEvent) => {
+                    const width = startWidth + (moveEvent.pageX - startX);
+                    if (width > 100) {
+                        column.style.flex = '0 0 auto'; // Disable flex to allow manual width
+                        column.style.width = width + 'px';
+                    }
+                };
+                const onMouseUp = () => {
+                    document.removeEventListener('mousemove', onMouseMove);
+                    document.removeEventListener('mouseup', onMouseUp);
+                    resizer.classList.remove('resizing');
+                    document.body.classList.remove('is-resizing');
+                };
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+                resizer.classList.add('resizing');
+            });
+        });
+    }
+</script>

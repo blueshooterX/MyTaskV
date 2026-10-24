@@ -1,0 +1,324 @@
+<!-- Task Editor Modal -->
+<!--
+  MyTask
+  https://github.com/blueshooterX/MyTask
+  
+  Copyright (c) 2026 blueshooterX
+  Licensed under the MIT License.
+-->
+
+<div id="taskModal" class="modal-overlay">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 id="modalTitle">新規タスク追加</h2>
+            <span class="close-modal">&times;</span>
+        </div>
+        <form id="taskForm">
+            <input type="hidden" id="taskId">
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="taskGroup">タスクグループ</label>
+                    <input type="text" id="taskGroupInput" list="groupOptions" placeholder="グループ名を入力または選択">
+                    <datalist id="groupOptions"></datalist>
+                </div>
+                <div class="form-group">
+                    <label for="taskPriorityInput">優先度</label>
+                    <select id="taskPriorityInput">
+                        <option value="高">高</option>
+                        <option value="中" selected>中</option>
+                        <option value="低">低</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="taskTitleInput">タスクタイトル</label>
+                <input type="text" id="taskTitleInput" required placeholder="タイトルを入力">
+            </div>
+
+            <div class="form-group">
+                <label>タスク内容 (リッチテキスト)</label>
+                <div class="rich-editor-container">
+                    <div class="toolbar" id="editorToolbar">
+                        <button type="button" data-cmd="bold" title="太字"><b>B</b></button>
+                        <button type="button" data-cmd="strikethrough" title="取り消し線"><s>S</s></button>
+                        <div class="color-picker">
+                            <button type="button" class="color-btn" id="colorBtn">A<span
+                                    class="color-bar"></span></button>
+                            <div class="color-menu" id="colorMenu">
+                                <div class="color-swatch" style="background:#000000" data-color="#000000"></div>
+                                <div class="color-swatch" style="background:#ef4444" data-color="#ef4444"></div>
+                                <div class="color-swatch" style="background:#3b82f6" data-color="#3b82f6"></div>
+                                <div class="color-swatch" style="background:#22c55e" data-color="#22c55e"></div>
+                                <div class="color-swatch" style="background:#f59e0b" data-color="#f59e0b"></div>
+                                <div class="color-swatch" style="background:#a855f7" data-color="#a855f7"></div>
+                                <div class="color-swatch" style="background:#ec4899" data-color="#ec4899"></div>
+                                <div class="color-swatch" style="background:#6b7280" data-color="#6b7280"></div>
+                            </div>
+                        </div>
+                        <button type="button" data-cmd="insertUnorderedList" title="箇条書き">•</button>
+                    </div>
+                    <div id="editor" contenteditable="true"></div>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="taskDueDateInput">期限</label>
+                    <input type="date" id="taskDueDateInput">
+                </div>
+                <div class="form-group">
+                    <label for="taskStatusInput">ステータス</label>
+                    <select id="taskStatusInput">
+                        <option value="未着手">未着手</option>
+                        <option value="実施中">実施中</option>
+                        <option value="保留">保留</option>
+                        <option value="完了">完了</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button type="button" id="deleteTaskBtn" class="btn secondary danger" style="display:none">削除</button>
+                <div style="flex:1"></div>
+                <button type="button" class="btn secondary cancel-btn">キャンセル</button>
+                <button type="submit" class="btn primary">保存</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<style>
+    .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: var(--scrim);
+        backdrop-filter: blur(3px);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 100;
+        visibility: hidden;
+        opacity: 0;
+        transition: opacity 0.3s, visibility 0.3s;
+    }
+
+    .modal-overlay.show {
+        visibility: visible;
+        opacity: 1;
+    }
+
+    .modal-content {
+        --c: var(--accent);
+        position: relative;
+        background: var(--panel-solid);
+        color: var(--ink);
+        width: 90%;
+        max-width: 600px;
+        border-radius: 10px;
+        border: 1px solid rgba(var(--accent-rgb), .35);
+        padding: 1.5rem 1.75rem;
+        box-shadow: 0 40px 80px -30px rgba(var(--shadow-rgb), var(--shadow-a)), 0 0 50px -20px var(--accent-glow);
+        transform-origin: 0 0;
+    }
+
+    .modal-content::after {
+        content: '';
+        position: absolute;
+        inset: -6px;
+        pointer-events: none;
+        background:
+            linear-gradient(var(--c), var(--c)) 0 0 / 16px 1.5px, linear-gradient(var(--c), var(--c)) 0 0 / 1.5px 16px,
+            linear-gradient(var(--c), var(--c)) 100% 0 / 16px 1.5px, linear-gradient(var(--c), var(--c)) 100% 0 / 1.5px 16px,
+            linear-gradient(var(--c), var(--c)) 0 100% / 16px 1.5px, linear-gradient(var(--c), var(--c)) 0 100% / 1.5px 16px,
+            linear-gradient(var(--c), var(--c)) 100% 100% / 16px 1.5px, linear-gradient(var(--c), var(--c)) 100% 100% / 1.5px 16px;
+        background-repeat: no-repeat;
+    }
+
+    .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.25rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 1px solid var(--line);
+    }
+
+    .modal-header h2 {
+        font-family: var(--font-body);
+        font-size: 1rem;
+        font-weight: 600;
+        letter-spacing: .04em;
+    }
+
+    .close-modal {
+        width: 28px;
+        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--line-strong);
+        border-radius: 4px;
+        font-size: 1.1rem;
+        cursor: pointer;
+        color: var(--ink-2);
+    }
+
+    .close-modal:hover {
+        color: var(--ink);
+        border-color: var(--accent);
+    }
+
+    .form-group {
+        margin-bottom: 1rem;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .form-group label {
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        font-weight: 500;
+        letter-spacing: .12em;
+        margin-bottom: 0.35rem;
+        color: var(--ink-3);
+    }
+
+    .form-group input,
+    .form-group select {
+        font-size: 0.88rem;
+        padding: 0.5rem 0.6rem;
+    }
+
+    .form-row {
+        display: flex;
+        gap: 1rem;
+    }
+
+    .form-row .form-group {
+        flex: 1;
+    }
+
+    /* リッチエディタ */
+    .rich-editor-container {
+        border: 1px solid var(--line-strong);
+        border-radius: 6px;
+        overflow: hidden;
+        background: var(--field);
+    }
+
+    .rich-editor-container:focus-within {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+
+    .toolbar {
+        border-bottom: 1px solid var(--line);
+        padding: 0.35rem;
+        display: flex;
+        gap: 0.25rem;
+        align-items: center;
+    }
+
+    .toolbar button {
+        width: 30px;
+        height: 30px;
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--ink-2);
+        border-radius: 4px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .toolbar button:hover {
+        color: var(--ink);
+        border-color: var(--line-strong);
+    }
+
+    #editor {
+        min-height: 150px;
+        max-height: 300px;
+        padding: 0.8rem 1rem;
+        outline: none;
+        overflow-y: auto;
+        color: var(--ink);
+        font-size: 0.88rem;
+    }
+
+    /* 黒の文字色はダーク配色では読めないため、本文色に置き換えて表示する（保存値は変えない） */
+    :root:not([data-ui="light"]) #editor font[color="#000000"],
+    :root:not([data-ui="light"]) #editor [style*="color: rgb(0, 0, 0)"],
+    :root:not([data-ui="light"]) .card-content [style*="color:#000000"] {
+        color: var(--ink) !important;
+    }
+
+    /* カラーピッカー */
+    .color-picker {
+        position: relative;
+    }
+
+    .color-btn {
+        display: flex;
+        flex-direction: column;
+        position: relative;
+    }
+
+    .color-bar {
+        width: 16px;
+        height: 3px;
+        background: var(--ink);
+        margin-top: -2px;
+    }
+
+    .color-menu {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        background: var(--panel-solid);
+        box-shadow: var(--shadow-pop);
+        border: 1px solid var(--line-strong);
+        border-radius: 6px;
+        padding: 0.5rem;
+        display: none;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 0.5rem;
+        z-index: 10;
+    }
+
+    .color-menu.show {
+        display: grid;
+    }
+
+    .color-swatch {
+        width: 24px;
+        height: 24px;
+        border-radius: 4px;
+        cursor: pointer;
+        border: 1px solid var(--line-strong);
+    }
+
+    .color-swatch:hover {
+        transform: scale(1.1);
+    }
+
+    .modal-footer {
+        display: flex;
+        gap: 0.75rem;
+        padding-top: 0.75rem;
+        border-top: 1px solid var(--line);
+    }
+
+    .btn.danger {
+        color: var(--danger);
+        border-color: rgba(240, 82, 82, .45);
+    }
+
+    .btn.danger:hover {
+        background: rgba(240, 82, 82, .1);
+        border-color: var(--danger);
+    }
+</style>

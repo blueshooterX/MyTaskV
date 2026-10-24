@@ -1,0 +1,287 @@
+<!--
+  MyTask
+  https://github.com/blueshooterX/MyTask
+
+  Copyright (c) 2026 blueshooterX
+  Licensed under the MIT License.
+-->
+
+<script>
+    /**
+     * HUD: rank / EXP / chain / objectives / achievements
+     * Everything except the chain is derived from the ActivityLog (past 26 weeks), so it matches across devices.
+     */
+    const Hud = (() => {
+        const XP_WEIGHT = { create: 20, update: 10, move: 15, complete: 50, reopen: 10 };
+        const QUEST_XP = 100;
+        const CHAIN_WINDOW = 3500;
+        const SEEN_KEY = 'mytask-achv';
+        const QUESTS = [
+            { id: 'q1', name: '今日 5 件更新する', goal: 5, value: d => d.total },
+            { id: 'q2', name: 'タスクを 2 件完了する', goal: 2, value: d => d.complete },
+            { id: 'q3', name: '新規タスクを 1 件追加する', goal: 1, value: d => d.create }
+        ];
+        const ACHV = {
+            firstClear: { code: 'A-01', name: '初回完了', desc: 'タスクを1件完了した' },
+            chain3: { code: 'A-02', name: '3チェイン', desc: '3.5秒以内に3回続けて操作した' },
+            chain5: { code: 'A-03', name: '5チェイン', desc: '3.5秒以内に5回続けて操作した' },
+            wake: { code: 'A-04', name: '再起動', desc: '待機中のカードを復帰させた' },
+            holo: { code: 'A-05', name: '全体俯瞰', desc: '俯瞰モードでボードを見渡した' },
+            gravity: { code: 'A-06', name: '重力制御', desc: '重力モードでカードを解放した' },
+            rank5: { code: 'A-07', name: 'RANK 05', desc: 'ランクが 05 に上がった' },
+            rank10: { code: 'A-08', name: 'RANK 10', desc: 'ランクが 10 に上がった' },
+            quests: { code: 'A-09', name: '本日の目標を達成', desc: '1日で3つの目標をすべて達成した' },
+            streak7: { code: 'A-10', name: '7日連続', desc: '7日続けてタスクを更新した' }
+        };
+
+        const need = lv => 300 + lv * 30;
+        const pad = n => String(n).padStart(2, '0');
+
+        let lastLevel = null;
+        let questState = {};
+        let primed = false;
+        let holdBarUntil = 0;
+        let chain = 0;
+        let lastAction = 0;
+        let chainTimer = 0;
+        let seen = new Set();
+
+        try { seen = new Set(JSON.parse(localStorage.getItem(SEEN_KEY) || '[]')); } catch (err) { seen = new Set(); }
+        const saveSeen = () => {
+            try { localStorage.setItem(SEEN_KEY, JSON.stringify([...seen])); } catch (err) { console.warn('実績の既読を保存できませんでした:', err); }
+        };
+
+        const questsMet = day => QUESTS.filter(q => q.value(day) >= q.goal).length;
+
+        function totalXp(daily) {
+            return Object.values(daily).reduce((sum, d) =>
+                sum
+                + Object.entries(XP_WEIGHT).reduce((s, [k, w]) => s + (d[k] || 0) * w, 0)
+                + questsMet(d) * QUEST_XP, 0);
+        }
+
+        function levelOf(xp) {
+            let level = 1;
+            let rest = xp;
+            while (rest >= need(level)) {
+                rest -= need(level);
+                level++;
+            }
+            return { level, xp: rest, need: need(level) };
+        }
+
+        const snapshot = () => {
+            const data = Activity.getData();
+            return { rank: levelOf(totalXp(data.daily || {})), today: Activity.today() };
+        };
+
+        // ---------- Rendering ----------
+        function setup() {
+            const root = document.getElementById('quests');
+            QUESTS.forEach(q => {
+                const chip = document.createElement('div');
+                chip.className = 'quest';
+                chip.id = `quest-${q.id}`;
+                chip.innerHTML = '<span><span class="quest-name"></span><span class="quest-reward"></span></span><span class="quest-count"></span><span class="quest-bar"><i></i></span>';
+                chip.querySelector('.quest-name').textContent = q.name;
+                chip.querySelector('.quest-reward').textContent = `+${QUEST_XP} EXP`;
+                root.appendChild(chip);
+            });
+        }
+
+        function renderBar(rank) {
+            document.getElementById('hudRank').textContent = pad(rank.level);
+            document.getElementById('hudXp').textContent = `${rank.xp} / ${rank.need}`;
+            document.getElementById('hudFill').style.width = `${(rank.xp / rank.need) * 100}%`;
+        }
+
+        function renderQuests(today) {
+            QUESTS.forEach(q => {
+                const chip = document.getElementById(`quest-${q.id}`);
+                if (!chip) return;
+                const value = Math.min(q.goal, q.value(today));
+                const done = value >= q.goal;
+                chip.classList.toggle('done', done);
+                chip.querySelector('.quest-count').textContent = done ? 'DONE' : `${value}/${q.goal}`;
+                chip.querySelector('.quest-bar i').style.width = `${(value / q.goal) * 100}%`;
+            });
+        }
+
+        /**
+         * @param {boolean} loaded true once the server data has arrived (derived achievements are primed silently)
+         */
+        function render(loaded = false) {
+            const { rank, today } = snapshot();
+            if (performance.now() >= holdBarUntil) renderBar(rank);
+            renderQuests(today);
+            lastLevel = rank.level;
+            questState = Object.fromEntries(QUESTS.map(q => [q.id, q.value(today) >= q.goal]));
+            if (loaded && !primed) {
+                primed = true;
+                derivedAchievements(rank, today).forEach(id => seen.add(id));
+                saveSeen();
+            }
+        }
+
+        function derivedAchievements(rank, today) {
+            const data = Activity.getData();
+            const days = Object.values(data.daily || {});
+            return [
+                days.some(d => d.complete > 0) && 'firstClear',
+                rank.level >= 5 && 'rank5',
+                rank.level >= 10 && 'rank10',
+                days.some(d => questsMet(d) === QUESTS.length) && 'quests',
+                Activity.streak() >= 7 && 'streak7',
+                questsMet(today) === QUESTS.length && 'quests'
+            ].filter(Boolean);
+        }
+
+        function unlock(id) {
+            if (seen.has(id)) return;
+            seen.add(id);
+            saveSeen();
+            if (!Motion.on('D4')) return;
+            const a = ACHV[id];
+            // HtmlService strips "//" to the end of the line even inside strings, so the slashes are escaped
+            Motion.logToast(`ACHIEVEMENT \/\/ ${a.code}`, a.name, a.desc);
+        }
+
+        // ---------- Chain (D2) ----------
+        const chainMult = n => Math.min(2, 1 + .1 * (n - 1));
+
+        function chainBox() {
+            return document.getElementById('chainBox') || document.body.appendChild(Object.assign(document.createElement('div'), {
+                id: 'chainBox',
+                className: 'chain',
+                hidden: true,
+                innerHTML: '<span class="chain-k">CHAIN</span><b class="chain-num">×2</b><span class="stat-k chain-mult"></span><div class="chain-timer"><i></i></div>'
+            }));
+        }
+
+        function bumpChain() {
+            if (!Motion.on('D2')) return 1;
+            const now = performance.now();
+            chain = now - lastAction < CHAIN_WINDOW ? chain + 1 : 1;
+            lastAction = now;
+            clearTimeout(chainTimer);
+            chainTimer = setTimeout(endChain, CHAIN_WINDOW);
+            if (chain >= 2) showChain();
+            if (chain === 3) unlock('chain3');
+            if (chain === 5) unlock('chain5');
+            return chain;
+        }
+
+        function showChain() {
+            const box = chainBox();
+            const wasHidden = box.hidden;
+            box.hidden = false;
+            const num = box.querySelector('.chain-num');
+            num.textContent = `×${chain}`;
+            box.querySelector('.chain-mult').textContent = `TEMPO ×${chainMult(chain).toFixed(1)}`;
+            const timer = box.querySelector('.chain-timer i');
+            timer.getAnimations().forEach(a => a.cancel());
+            if (!Motion.reducedMotion()) {
+                num.animate([{ opacity: .2, transform: 'translateX(6px)' }, { opacity: 1, transform: 'none' }], { duration: 200 });
+                timer.animate([{ transform: 'scaleX(1)' }, { transform: 'scaleX(0)' }], { duration: CHAIN_WINDOW, fill: 'forwards' });
+                if (wasHidden) box.animate([{ transform: 'translateX(16px)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: 220 });
+            }
+            Motion.sfx.play('chain', chain);
+        }
+
+        function endChain() {
+            const n = chain;
+            chain = 0;
+            if (n < 2) return;
+            const box = chainBox();
+            box.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 260 }).onfinish = () => { box.hidden = true; };
+        }
+
+        // ---------- Rank up ----------
+        function rankUp(from, to) {
+            Motion.sfx.play('level');
+            if (to >= 5) unlock('rank5');
+            if (to >= 10) unlock('rank10');
+            if (Motion.reducedMotion()) return;
+            document.getElementById('hud').animate([
+                { boxShadow: '0 0 0 1px var(--accent), 0 0 26px -4px var(--accent-glow)' },
+                { boxShadow: '0 0 0 0 rgba(0,0,0,0), 0 0 0 0 rgba(0,0,0,0)' }
+            ], { duration: 1400, easing: 'ease-out' });
+            const line = document.createElement('span');
+            line.className = 'rank-line';
+            line.style.top = `${document.querySelector('header').getBoundingClientRect().bottom}px`;
+            document.body.appendChild(line);
+            line.animate([{ transform: 'translateX(-100%)' }, { transform: 'translateX(100%)' }], { duration: 900, easing: 'cubic-bezier(.5,0,.5,1)' }).onfinish = () => line.remove();
+            const p = document.createElement('div');
+            p.className = 'rank-panel';
+            p.innerHTML = '<span class="rank-k">RANK UP</span><span class="rank-v"></span>';
+            p.querySelector('.rank-v').textContent = `${pad(from)} → ${pad(to)}`;
+            document.body.appendChild(p);
+            p.animate([
+                { transform: 'translate(-50%, -6px)', opacity: 0, clipPath: 'inset(0 50% 0 50%)' },
+                { transform: 'translate(-50%, 0)', opacity: 1, clipPath: 'inset(0 0 0 0)', offset: .14 },
+                { transform: 'translate(-50%, 0)', opacity: 1, clipPath: 'inset(0 0 0 0)', offset: .86 },
+                { transform: 'translate(-50%, 0)', opacity: 0, clipPath: 'inset(0 0 0 0)' }
+            ], { duration: 2400, easing: 'cubic-bezier(.2,.8,.2,1)' }).onfinish = () => p.remove();
+        }
+
+        // ---------- Events ----------
+        function barTarget() {
+            const b = document.getElementById('hudBar').getBoundingClientRect();
+            if (!b.width) return { x: innerWidth - 40, y: 30 };
+            const fill = document.getElementById('hudFill').getBoundingClientRect();
+            return { x: b.left + fill.width, y: b.top + b.height / 2 };
+        }
+
+        /** Called by Activity.record after the optimistic data update, before re-render */
+        function onRecord(type, task) {
+            const n = bumpChain();
+            const before = { level: lastLevel, quests: { ...questState } };
+            const { rank, today } = snapshot();
+            const gain = XP_WEIGHT[type] || XP_WEIGHT.update;
+
+            if (type === 'complete') unlock('firstClear');
+            if (Activity.streak() >= 7) unlock('streak7');
+
+            const newlyDone = QUESTS.filter(q => !before.quests[q.id] && q.value(today) >= q.goal);
+            if (newlyDone.length && Motion.on('D5')) {
+                newlyDone.forEach(q => {
+                    Motion.logToast('OBJECTIVE COMPLETE', q.name, `ボーナス +${QUEST_XP} EXP`);
+                    const chip = document.getElementById(`quest-${q.id}`);
+                    if (chip && !Motion.reducedMotion()) {
+                        chip.animate([
+                            { boxShadow: '0 0 0 1px var(--accent), 0 0 24px -6px var(--accent-glow)' },
+                            { boxShadow: '0 0 0 0 rgba(0,0,0,0), 0 0 0 0 rgba(0,0,0,0)' }
+                        ], { duration: 900, easing: 'ease-out' });
+                    }
+                });
+            }
+            if (questsMet(today) === QUESTS.length) unlock('quests');
+
+            if (Motion.on('D1')) {
+                holdBarUntil = performance.now() + 1400;
+                requestAnimationFrame(() => {
+                    const card = Motion.findCard(task.id);
+                    const anchor = card && card.getBoundingClientRect().width ? card : document.getElementById('activityStats');
+                    const r = anchor.getBoundingClientRect();
+                    const x = r.left + r.width / 2;
+                    const y = r.top + 4;
+                    Motion.popNum(x, y, `+${gain} EXP`, n > 1 ? `CHAIN ×${n}` : '');
+                    Motion.packets(x, y, 3, barTarget(), () => {
+                        holdBarUntil = 0;
+                        renderBar(snapshot().rank);
+                        if (before.level !== null && rank.level > before.level) rankUp(before.level, rank.level);
+                    });
+                });
+            } else if (before.level !== null && rank.level > before.level) {
+                rankUp(before.level, rank.level);
+            }
+        }
+
+        /** Session events that are not stored in the ActivityLog */
+        function event(name) {
+            if (ACHV[name]) unlock(name);
+        }
+
+        return { setup, render, onRecord, event };
+    })();
+</script>

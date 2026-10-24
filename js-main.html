@@ -1,0 +1,258 @@
+<!--
+  MyTask
+  https://github.com/blueshooterX/MyTask
+  
+  Copyright (c) 2026 blueshooterX
+  Licensed under the MIT License.
+-->
+
+<script>
+    /**
+     * Main Client Controller
+     */
+
+    const state = {
+        tasks: [],
+        mapping: {},
+        filter: { group: '', priority: '' },
+        columnSort: {
+            '未着手': 'default',
+            '実施中': 'default',
+            '保留': 'default',
+            '完了': 'default'
+        },
+        showDetail: true,
+        showDone: false,
+        hasPendingOrderChanges: false,
+        pendingUpdates: [],
+        isSavingOrder: false,
+        justSavedId: null
+    };
+
+    // Default column width ratio (focus on 実施中)
+    const COLUMN_FLEX = { '未着手': 1, '実施中': 3, '保留': 1, '完了': 1 };
+
+    // Initial Load
+    window.onload = () => {
+        Motion.init();
+        RichTextEditor.init('editor', 'editorToolbar');
+        setupEventListeners();
+        setupDrag();
+        setupResizers();
+        setupTaskModal();
+        Activity.setup();
+        Hud.setup();
+
+        // Initial UI State check
+        updateDoneVisibility();
+        updateDetailButton();
+
+        // Load Data and Settings (the boot sequence replaces the loading overlay when enabled)
+        const booting = Motion.boot.start();
+        refreshData(booting);
+
+        google.script.run.withSuccessHandler(settings => {
+            state.mapping = settings.mapping;
+            document.getElementById('appVersion').innerText = settings.version || '';
+            // Priority classes depend on the mapping; re-render if tasks arrived first
+            if (state.tasks.length) renderBoard();
+        }).getSettings();
+    };
+
+    function initialize(data) {
+        state.tasks = data;
+        updateDataLists();
+        renderBoard();
+        Motion.boot.step('data', data.length);
+    }
+
+    function refreshData(silent = false) {
+        if (!silent) showLoading('loading-overlay', true);
+        google.script.run
+            .withSuccessHandler(data => {
+                // Merge pending order and status changes if any exist in memory
+                if (state.hasPendingOrderChanges) {
+                    data.forEach(fetchedTask => {
+                        const pending = state.pendingUpdates.find(u => u.id == fetchedTask.id);
+                        if (pending) {
+                            fetchedTask.status = pending.status;
+                            fetchedTask.no = pending.no;
+                        }
+                    });
+                }
+                initialize(data);
+                showLoading('loading-overlay', false);
+            })
+            .withFailureHandler(handleError)
+            .getData();
+        Activity.load();
+    }
+
+    function updateDataLists() {
+        const groups = [...new Set(state.tasks.map(t => t.group).filter(Boolean))];
+        const filterSelect = document.getElementById('filterGroup');
+        const datalist = document.getElementById('groupOptions');
+
+        // Filter HTML
+        const currentFilter = filterSelect.value;
+        filterSelect.innerHTML = '<option value="">全グループ</option>' +
+            groups.map(g => `<option value="${g}" ${g === currentFilter ? 'selected' : ''}>${g}</option>`).join('');
+
+        // Modal Input Candidates
+        datalist.innerHTML = groups.map(g => `<option value="${g}">`).join('');
+    }
+
+    function setupEventListeners() {
+        // Filter
+        document.getElementById('filterGroup').onchange = (e) => {
+            state.filter.group = e.target.value;
+            renderBoard();
+        };
+        document.getElementById('filterPriority').onchange = (e) => {
+            state.filter.priority = e.target.value;
+            renderBoard();
+        };
+
+        // Column Sort
+        document.querySelectorAll('.column-sort').forEach(sel => {
+            sel.onchange = (e) => {
+                const status = e.target.dataset.status;
+                state.columnSort[status] = e.target.value;
+                renderBoard();
+            };
+        });
+
+        // Toggle Detail
+        window.updateDetailButton = () => {
+            const btn = document.getElementById('toggleDetailBtn');
+            if (state.showDetail) {
+                btn.innerText = '詳細：表示';
+                btn.classList.add('primary');
+                btn.classList.remove('secondary');
+            } else {
+                btn.innerText = '詳細：非表示';
+                btn.classList.remove('primary');
+                btn.classList.add('secondary');
+            }
+        };
+        document.getElementById('toggleDetailBtn').onclick = () => {
+            state.showDetail = !state.showDetail;
+            updateDetailButton();
+            renderBoard();
+        };
+
+        // Toggle Done Column
+        const doneColumn = document.querySelector('.kanban-column[data-status="完了"]');
+
+        window.updateDoneVisibility = () => {
+            const btn = document.getElementById('toggleDoneBtn');
+            // Reset widths
+            document.querySelectorAll('.kanban-column').forEach(col => {
+                col.style.width = '';
+                col.style.flex = `${COLUMN_FLEX[col.dataset.status] || 1} 1 0`;
+            });
+
+            if (state.showDone) {
+                doneColumn.classList.remove('hidden');
+                btn.innerText = '完了：表示';
+                btn.classList.add('primary');
+                btn.classList.remove('secondary');
+            } else {
+                doneColumn.classList.add('hidden');
+                btn.innerText = '完了：非表示';
+                btn.classList.remove('primary');
+                btn.classList.add('secondary');
+            }
+        };
+
+        document.getElementById('toggleDoneBtn').onclick = () => {
+            state.showDone = !state.showDone;
+            window.updateDoneVisibility();
+        };
+
+        // Add Task
+        document.getElementById('addTaskBtn').onclick = () => openModal();
+
+        // Import Google Tasks
+        document.getElementById('importTasksBtn').onclick = () => {
+            document.getElementById('dropdownMenu').classList.remove('show');
+            showLoading('loading-overlay', true);
+            google.script.run
+                .withSuccessHandler(res => {
+                    refreshData();
+                    alert(`${res.count} 件のタスクを抽出しました。`);
+                })
+                .withFailureHandler(handleError)
+                .importFromGoogleTasks();
+        };
+
+        // Menu Toggle
+        const menuTrigger = document.getElementById('menuTrigger');
+        const dropdownMenu = document.getElementById('dropdownMenu');
+        menuTrigger.onclick = (e) => {
+            e.stopPropagation();
+            dropdownMenu.classList.toggle('show');
+        };
+        window.addEventListener('click', () => {
+            dropdownMenu.classList.remove('show');
+        });
+
+        // Save Order Button
+        document.getElementById('saveOrderBtn').onclick = () => {
+            if (state.isSavingOrder || !state.hasPendingOrderChanges) return;
+
+            state.isSavingOrder = true;
+            window.updateSaveBannerVisibility();
+
+            google.script.run
+                .withSuccessHandler(() => {
+                    state.hasPendingOrderChanges = false;
+                    state.isSavingOrder = false;
+                    state.pendingUpdates = [];
+                    window.updateSaveBannerVisibility();
+                    refreshData(true);
+                })
+                .withFailureHandler(err => {
+                    state.isSavingOrder = false;
+                    window.updateSaveBannerVisibility();
+                    handleError(err);
+                })
+                .updateOrderAndStatus(state.pendingUpdates);
+        };
+
+        // Prevent leaving page when there are unsaved changes
+        window.addEventListener('beforeunload', (e) => {
+            if (state.hasPendingOrderChanges) {
+                e.preventDefault();
+                e.returnValue = ''; // Standard trigger for modern browsers
+            }
+        });
+    }
+
+    window.updateSaveBannerVisibility = () => {
+        const banner = document.getElementById('save-banner');
+        if (!banner) return;
+
+        const saveBtn = document.getElementById('saveOrderBtn');
+
+        if (state.hasPendingOrderChanges) {
+            banner.classList.add('show');
+            if (state.isSavingOrder) {
+                saveBtn.disabled = true;
+                saveBtn.innerText = '保存中...';
+            } else {
+                saveBtn.disabled = false;
+                saveBtn.innerText = 'スプレッドシートに保存';
+            }
+        } else {
+            banner.classList.remove('show');
+        }
+    };
+
+    function handleError(err) {
+        showLoading('loading-overlay', false);
+        Motion.boot.fail(err.message);
+        alert('Error: ' + err.message);
+        console.error(err);
+    }
+</script>

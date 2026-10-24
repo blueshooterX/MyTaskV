@@ -1,0 +1,37 @@
+/**
+ * App Configuration
+ * This is a sample configuration file.
+ * Please copy this file to 'AppConfig.js' and set your own values.
+ */
+const CONFIG = {
+    SPREADSHEET_ID: 'YOUR_SPREADSHEET_ID_HERE', // TODO: Replace with your actual Spreadsheet ID
+    SHEET_NAME: 'TaskList',
+    MASTER_SHEET_NAME: 'AccessControl',
+    ACTIVITY_SHEET_NAME: 'ActivityLog',
+    COLUMNS: {
+        ID: 0,
+        DISPLAY_NO: 1,
+        GROUP: 2,
+        TITLE: 3,
+        CONTENT: 4,
+        DUE_DATE: 5,
+        PRIORITY: 6,
+        STATUS: 7,
+        LABEL: 8,
+        UPDATED_AT: 9
+    },
+    MAPPING: {
+        STATUS: {
+            '未着手': 'backlog',
+            '実施中': 'wip',
+            '保留': 'pending',
+            '完了': 'done'
+        },
+        PRIORITY: {
+            '高': 'high',
+            '中': 'middle',
+            '低': 'low'
+        }
+    },
+    VERSION: 'v1.7.0'
+};

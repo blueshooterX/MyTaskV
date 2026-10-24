@@ -1,0 +1,173 @@
+<!--
+  MyTask
+  https://github.com/blueshooterX/MyTask
+  
+  Copyright (c) 2026 blueshooterX
+  Licensed under the MIT License.
+-->
+
+<script>
+    /**
+     * Rich Text Editor Component (Reusable)
+     */
+
+    const RichTextEditor = {
+        focusedRange: null,
+
+        init: function (editorId, toolbarId) {
+            const editor = document.getElementById(editorId);
+
+            editor.addEventListener('blur', () => {
+                const sel = window.getSelection();
+                if (sel.rangeCount > 0) {
+                    this.focusedRange = sel.getRangeAt(0);
+                }
+            });
+
+            const buttons = document.querySelectorAll(`#${toolbarId} button[data-cmd]`);
+            buttons.forEach(btn => {
+                btn.onclick = (e) => {
+                    e.preventDefault();
+                    this.restoreFocus(editor);
+                    const cmd = btn.dataset.cmd;
+                    document.execCommand(cmd, false, null);
+                };
+            });
+        },
+
+        restoreFocus: function (editorElement) {
+            editorElement.focus();
+            if (this.focusedRange) {
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(this.focusedRange);
+            }
+        },
+
+        applyColor: function (editorId, color) {
+            const editor = document.getElementById(editorId);
+            this.restoreFocus(editor);
+            document.execCommand('foreColor', false, color);
+        },
+
+        getHtml: function (editorId) {
+            return document.getElementById(editorId).innerHTML;
+        },
+
+        getRawText: function (editorId) {
+            return document.getElementById(editorId).innerText;
+        },
+
+        setHtml: function (editorId, html) {
+            document.getElementById(editorId).innerHTML = html;
+        },
+
+        clear: function (editorId) {
+            document.getElementById(editorId).innerHTML = '';
+        },
+
+        getRichTextData: function (editorId) {
+            const editor = document.getElementById(editorId);
+            const text = [];
+            const runs = [];
+            let currentOffset = 0;
+
+            function addNewline() {
+                text.push('\n');
+                runs.push({
+                    start: currentOffset,
+                    end: currentOffset + 1,
+                    style: {} // Neutral style to prevent color bleeding
+                });
+                currentOffset += 1;
+            }
+
+            function hasTrailingNewline() {
+                if (text.length === 0) return true; // Treat start as having "newline"
+                const lastStr = text[text.length - 1];
+                return lastStr.length > 0 && lastStr[lastStr.length - 1] === '\n';
+            }
+
+            function walk(node, style) {
+                if (node.nodeType === Node.TEXT_NODE) {
+                    const content = node.textContent;
+                    if (content.length > 0) {
+                        text.push(content);
+                        runs.push({
+                            start: currentOffset,
+                            end: currentOffset + content.length,
+                            style: { ...style }
+                        });
+                        currentOffset += content.length;
+                    }
+                } else if (node.nodeType === Node.ELEMENT_NODE) {
+                    const tagName = node.tagName.toLowerCase();
+
+                    if (tagName === 'br') {
+                        addNewline();
+                        return;
+                    }
+
+                    // Check if block element
+                    const display = window.getComputedStyle(node).display;
+                    // NOTE: Treating 'flex' as block for this editor context.
+                    // If complex flex layouts are introduced later, this might need review.
+                    const isVisualBlock = display === 'block' || display === 'list-item' || display === 'flex';
+                    const isSemanticBlock = ['div', 'p', 'li', 'ul', 'ol', 'h1', 'h2', 'h3', 'blockquote'].includes(tagName);
+                    const isBlock = isVisualBlock || isSemanticBlock;
+
+                    // Pre-block newline check
+                    if (isBlock && !hasTrailingNewline()) {
+                        addNewline();
+                    }
+
+                    // Clone style for children
+                    const newStyle = { ...style };
+
+                    // Parse styles
+                    if (tagName === 'b' || tagName === 'strong' || node.style.fontWeight === 'bold' || parseInt(node.style.fontWeight) >= 700) newStyle.bold = true;
+                    if (tagName === 'i' || tagName === 'em' || node.style.fontStyle === 'italic') newStyle.italic = true;
+                    if (tagName === 'u' || node.style.textDecoration.includes('underline')) newStyle.underline = true;
+                    if (tagName === 's' || tagName === 'strike' || node.style.textDecoration.includes('line-through')) newStyle.strikethrough = true;
+
+                    if (node.style.color) newStyle.color = node.style.color;
+                    if (node.color) newStyle.color = node.color; // <font color="...">
+
+                    // Child nodes
+                    node.childNodes.forEach(child => walk(child, newStyle));
+
+                    // Post-block newline check
+                    if (isBlock && !hasTrailingNewline()) {
+                        addNewline();
+                    }
+                }
+            }
+
+            // Start walk from children to avoid treating the editor container itself as a block adding newlines
+            editor.childNodes.forEach(child => walk(child, {}));
+
+            // Merge adjacent runs with same style? GAS might handle many small runs fine, or we can optimize.
+            // Optimization: If style is identical to previous, extend end.
+            const optimizedRuns = [];
+            if (runs.length > 0) {
+                let current = runs[0];
+                for (let i = 1; i < runs.length; i++) {
+                    const next = runs[i];
+                    // Compare styles (simple JSON stringify is enough for this flat structure)
+                    if (current.end === next.start && JSON.stringify(current.style) === JSON.stringify(next.style)) {
+                        current.end = next.end;
+                    } else {
+                        optimizedRuns.push(current);
+                        current = next;
+                    }
+                }
+                optimizedRuns.push(current);
+            }
+
+            return {
+                text: text.join(''),
+                runs: optimizedRuns
+            };
+        }
+    };
+</script>

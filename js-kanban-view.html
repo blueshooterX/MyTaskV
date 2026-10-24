@@ -1,0 +1,310 @@
+<!--
+  MyTask
+  https://github.com/blueshooterX/MyTask
+
+  Copyright (c) 2026 blueshooterX
+  Licensed under the MIT License.
+-->
+
+<script>
+    /**
+     * Kanban View Logic
+     */
+
+    // Labels: '' = none. Legacy emoji labels are read as the matching monochrome glyph.
+    const LABELS = ['', '★', '⚑', '◆', '♥'];
+    const LABEL_GLYPHS = ['☆', '★', '⚑', '◆', '♥︎'];
+    const LEGACY_LABELS = { '⭐': '★', '⚠️': '⚑', '⚠': '⚑', '💥': '◆', '🩷': '♥' };
+    const LABEL_SYM_H = 18;
+    const DUE_WINDOW_DAYS = 14;
+
+    function normalizeLabel(value) {
+        if (LABELS.includes(value)) return value;
+        return LEGACY_LABELS[value] || '';
+    }
+
+    function renderBoard() {
+        const board = document.getElementById('kanban-container');
+        const snapshot = Motion.capture(board);
+        const containers = {
+            '未着手': document.getElementById('backlog'),
+            '実施中': document.getElementById('wip'),
+            '保留': document.getElementById('pending'),
+            '完了': document.getElementById('done')
+        };
+
+        // Clear
+        Object.values(containers).forEach(c => c.innerHTML = '');
+
+        const filtered = state.tasks.filter(t => {
+            const matchGroup = !state.filter.group || t.group === state.filter.group;
+            const matchPriority = !state.filter.priority || t.priority === state.filter.priority;
+            return matchGroup && matchPriority;
+        });
+
+        // Group by status
+        const statusGroups = { '未着手': [], '実施中': [], '保留': [], '完了': [] };
+        filtered.forEach(t => { if (statusGroups[t.status]) statusGroups[t.status].push(t); });
+
+        Object.entries(statusGroups).forEach(([status, tasks]) => {
+            const list = containers[status];
+            const sortMode = state.columnSort[status];
+
+            // Sort
+            tasks.sort((a, b) => {
+                if (sortMode === 'priority') {
+                    const order = { '高': 1, '中': 2, '低': 3 };
+                    return (order[a.priority] || 99) - (order[b.priority] || 99);
+                } else if (sortMode === 'group') {
+                    return (a.group || '').localeCompare(b.group || '', 'ja');
+                } else if (sortMode === 'dueDate') {
+                    if (!a.dueDate) return 1;
+                    if (!b.dueDate) return -1;
+                    return new Date(a.dueDate) - new Date(b.dueDate);
+                } else if (sortMode === 'updated') {
+                    if (!a.updatedAt) return 1;
+                    if (!b.updatedAt) return -1;
+                    return new Date(b.updatedAt) - new Date(a.updatedAt);
+                }
+                // default
+                return (a.no || 0) - (b.no || 0);
+            });
+
+            tasks.forEach(task => {
+                const card = createCardElement(task);
+                list.appendChild(card);
+            });
+
+            // Update count
+            const column = list.parentElement;
+            column.querySelector('.count').innerText = tasks.length;
+            renderColumnFresh(column, tasks);
+            renderPriorityBar(column.querySelector('.priority-bar'), tasks);
+        });
+
+        board.classList.toggle('show-detail', state.showDetail);
+        Motion.play(snapshot, board);
+    }
+
+    function renderColumnFresh(column, tasks) {
+        const heading = column.querySelector('.column-header h2');
+        const badge = heading.querySelector('.col-fresh') || heading.appendChild(Object.assign(document.createElement('span'), { className: 'col-fresh' }));
+        const freshCount = tasks.filter(t => t.updatedAt && daysSince(t.updatedAt) === 0).length;
+        badge.textContent = freshCount ? `+${freshCount} TODAY` : '';
+        badge.title = `今日更新: ${freshCount}件`;
+    }
+
+    function renderPriorityBar(bar, tasks) {
+        const segments = [['高', 'high'], ['中', 'middle'], ['低', 'low']]
+            .map(([label, key]) => ({ label, key, count: tasks.filter(t => t.priority === label).length }))
+            .filter(s => s.count > 0);
+        bar.innerHTML = segments
+            .map(s => `<span class="pb-seg pb-${s.key}" style="flex:${s.count}" title="優先度${s.label}: ${s.count}件"></span>`)
+            .join('');
+    }
+
+    /**
+     * Freshness style based on last update
+     * - today: live glow / 1-2 days: label only / 3-6 days: desaturated / 7+ days: dimmed (+IDLE badge for 実施中)
+     */
+    function getFreshness(task) {
+        const none = { cls: '', badge: '' };
+        if (!task.updatedAt || task.status === '完了') return none;
+        const days = daysSince(task.updatedAt);
+        if (days === null) return none;
+        if (days <= 0) return { cls: 'fresh-today', badge: '<span class="fresh-badge" title="今日更新"><i class="dot"></i>今日更新</span>' };
+        if (days < 3) return { cls: 'fresh-recent', badge: `<span class="recent-badge" title="最終更新から${days}日">${days === 1 ? '昨日' : '2日前'}</span>` };
+        if (days >= 7 && task.status === '実施中') {
+            return { cls: 'dormant', badge: `<span class="dormant-badge" title="最終更新から${days}日"><i class="dot"></i>IDLE ${days}日</span>` };
+        }
+        return { cls: 'stale', badge: '' };
+    }
+
+    /** Due gauge (remaining days over a 14-day window) and overdue state, for open tasks only */
+    function getDueInfo(task) {
+        const none = { cls: '', overdue: false, gauge: '' };
+        if (!task.dueDate || task.status === '完了') return none;
+        const passed = daysSince(task.dueDate);
+        if (passed === null) return none;
+        const left = -passed;
+        const ratio = Math.min(1, Math.max(0, left / DUE_WINDOW_DAYS));
+        const color = ratio > 0.5 ? 'var(--priority-low)' : ratio > 0.2 ? 'var(--priority-middle)' : 'var(--priority-high)';
+        return {
+            cls: left < 0 ? 'has-due boss' : 'has-due',
+            overdue: left < 0,
+            gauge: `<span class="card-gauge" aria-hidden="true" title="期限まで残り${Math.max(0, left)}日"><i style="width:${ratio * 100}%;background:${color}"></i></span>`
+        };
+    }
+
+    function buildProgressHtml(contentRaw) {
+        const MAX_DOTS = 7;
+        const entries = parseProgressEntries(contentRaw);
+        if (entries.length === 0) return '';
+
+        const shown = entries.slice(-MAX_DOTS);
+        const latest = shown[shown.length - 1];
+        const dots = shown.map((e, i) => {
+            const age = daysSince(e.date.toISOString());
+            const cls = [i === shown.length - 1 ? 'latest' : '', age !== null && age <= 3 ? 'recent' : ''].join(' ');
+            return `<span class="progress-dot ${cls}" title="${escapeHtml(e.text)}"></span>`;
+        }).join('<span class="progress-link"></span>');
+
+        return `<div class="card-progress">
+            <span class="progress-dots">${dots}</span>
+            <span class="progress-meta">LOG ${entries.length} · 最終 ${latest.date.getMonth() + 1}/${latest.date.getDate()}</span>
+        </div>`;
+    }
+
+    /** Footer row: freshness badge (left) + progress dots (right). Omitted when both are empty. */
+    function buildFooterHtml(badgeHtml, progressHtml) {
+        if (!badgeHtml && !progressHtml) return '';
+        return `<div class="card-footer">${badgeHtml}${progressHtml}</div>`;
+    }
+
+    /** Mark task as touched on the client (optimistic) */
+    function touchTask(task, type) {
+        task.updatedAt = new Date().toISOString();
+        Activity.record(type, task);
+    }
+
+    function createCardElement(task) {
+        const div = document.createElement('div');
+        const priorityMap = (state.mapping && state.mapping.PRIORITY) || {};
+        const priorityClass = `priority-${priorityMap[task.priority] || 'middle'}`;
+        const freshness = getFreshness(task);
+        const due = getDueInfo(task);
+
+        div.className = ['task-card', priorityClass, freshness.cls, due.cls].filter(Boolean).join(' ');
+        div.dataset.id = task.id;
+        div.dataset.status = task.status;
+
+        const dateStr = task.dueDate ? new Date(task.dueDate).toLocaleDateString('ja-JP') : '';
+        const groupColor = generateColorFromHash(task.group);
+
+        const label = normalizeLabel(task.label);
+        const labelIdx = LABELS.indexOf(label);
+        const strip = [...LABEL_GLYPHS, ...LABEL_GLYPHS, ...LABEL_GLYPHS].map(s => `<span class="label-sym">${s}</span>`).join('');
+        const checkClass = task.status === '完了' ? 'completed' : '';
+
+        div.innerHTML = `
+    <span class="reticle" aria-hidden="true"></span>
+    <div class="card-face">
+      <span class="card-glare" aria-hidden="true"></span>
+      ${due.gauge}
+      <div class="card-header-row">
+        <span class="card-label ${label ? 'active' : 'inactive'}" title="ラベル"><span class="label-strip" style="transform: translateY(${-(5 + labelIdx) * LABEL_SYM_H}px)">${strip}</span></span>
+        <div class="card-group" style="--gc: ${groupColor}">${task.group || 'なし'}</div>
+        <div class="card-title">${task.title}</div>
+        <span class="boss-tag">OVERDUE</span>
+        <div class="card-due ${due.overdue ? 'overdue' : ''}">${dateStr}</div>
+        <span class="card-check material-icons ${checkClass}" title="${task.status === '完了' ? '実施中に戻す' : '完了にする'}">check</span>
+      </div>
+      <div class="card-preview"></div>
+      <div class="card-content">${task.contentHtml}</div>
+      ${buildFooterHtml(freshness.badge, buildProgressHtml(task.contentRaw))}
+    </div>
+`;
+        // Process content with link chips (Drive links show type icon + file name)
+        DriveLinks.requestFromText(task.contentRaw);
+        const processedHtml = (task.contentHtml || '').replace(
+            /(https?:\/\/[^\s<]+)/g,
+            (escapedUrl) => DriveLinks.buildChip(unescapeHtml(escapedUrl), 'full')
+        );
+        div.querySelector('.card-content').innerHTML = processedHtml;
+
+        // Preview: plain text with compact chips
+        div.querySelector('.card-preview').innerHTML = String(task.contentRaw || '')
+            .split(/(https?:\/\/[^\s]+)/g)
+            .map((part, i) => (i % 2 === 1 ? DriveLinks.buildChip(part, 'compact') : escapeHtml(part)))
+            .join('');
+
+        // Label Click: ☆ (none) → ★ → ⚑ → ◆ → ♥
+        div.querySelector('.card-label').onclick = (e) => {
+            e.stopPropagation();
+            const labelEl = e.currentTarget;
+            const prevIdx = LABELS.indexOf(normalizeLabel(task.label));
+            const nextIdx = (prevIdx + 1) % LABELS.length;
+            task.label = LABELS[nextIdx];
+            labelEl.className = `card-label ${task.label ? 'active' : 'inactive'}`;
+            Motion.roll(labelEl, prevIdx, nextIdx, LABEL_SYM_H);
+
+            touchTask(task, 'update');
+            Motion.savedFlash(div);
+
+            google.script.run
+                .withSuccessHandler(() => refreshData(true))
+                .withFailureHandler(handleError)
+                .saveTask(task);
+        };
+
+        // Check Click: transfer to 完了 (or back to 実施中)
+        div.querySelector('.card-check').onclick = (e) => {
+            e.stopPropagation();
+            const toDone = task.status !== '完了';
+            Motion.transfer(div, task.id, () => {
+                task.status = toDone ? '完了' : '実施中';
+                touchTask(task, toDone ? 'complete' : 'reopen');
+                renderBoard();
+            }, { toDone, crit: toDone && task.priority === '高' });
+
+            google.script.run
+                .withSuccessHandler(() => refreshData(true))
+                .withFailureHandler(handleError)
+                .saveTask(task);
+        };
+
+        div.onclick = () => {
+            if (Motion.consumeClick()) return;
+            openModal(task, div);
+        };
+        return div;
+    }
+
+    function setupDrag() {
+        Motion.setupDrag(document.getElementById('kanban-container'), updateAfterDrag);
+    }
+
+    function updateAfterDrag() {
+        const updates = [];
+        const statusCols = document.querySelectorAll('.kanban-column');
+
+        statusCols.forEach(col => {
+            const status = col.dataset.status;
+            const cards = col.querySelectorAll('.task-card');
+            cards.forEach((card, index) => {
+                const id = card.dataset.id;
+                const no = index + 1;
+
+                // Update state
+                const task = state.tasks.find(t => t.id == id);
+                if (task) {
+                    task.status = status;
+                    task.no = no;
+                }
+
+                updates.push({ id, status, no });
+            });
+        });
+
+        state.pendingUpdates = updates;
+        state.hasPendingOrderChanges = true;
+
+        if (typeof window.updateSaveBannerVisibility === 'function') {
+            window.updateSaveBannerVisibility();
+        }
+
+        renderBoard();
+    }
+
+    function setupResizers() {
+        setupColumnResizer('.resizer', '.kanban-column', document.getElementById('kanban-container'));
+    }
+
+    function getUrlIcon(url) {
+        if (url.includes('mail.google.com')) return 'email';
+        if (url.includes('drive.google.com')) return 'folder';
+        if (url.includes('calendar.google.com')) return 'calendar_today';
+        if (url.includes('meet.google.com')) return 'videocam';
+        return 'link';
+    }
+</script>
